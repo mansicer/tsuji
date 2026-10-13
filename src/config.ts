@@ -1,8 +1,9 @@
 // 部署相关的配置,构建时由 .env.<mode> 决定(vite build --mode selfhost 用 .env.selfhost)
 import hoooope from "./builtin/hoooope-2026.json";
+import mygo from "./builtin/mygo-maigo-center.json";
 
 /** 内置模板 */
-export const BUILTIN = [hoooope];
+export const BUILTIN = [mygo, hoooope];
 /** 默认模型:识别 / 翻译 / 创建模板 */
 export const ASR_MODEL = "gpt-live-transcribe", MT_MODEL = "gpt-6-luna", CT_MODEL = "gpt-6.1-sol";
 /** server_vad 阈值默认值 */
