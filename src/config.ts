@@ -11,6 +11,6 @@ export const VAD = 0.2;
 /** 同站的 OpenAI 转发路径(服务器代填 key,自托管时在 .env.selfhost 里配);空 = 只能用户自己填 key */
 export const SERVER_API: string = import.meta.env.VITE_SERVER_API || "";
 /** CAM++ 声纹模型,构建前由 scripts/fetch-model.mjs 下载到 public/models/ */
-export const SPK_MODEL = new URL("models/campplus.onnx", document.baseURI).href;
+export const SPK_MODEL = new URL(import.meta.env.BASE_URL + "models/campplus.onnx", location.href).href;
 /** 构建时间(东京时间),设置页显示 */
 export const BUILD: string = __BUILD__;
