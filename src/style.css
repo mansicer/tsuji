@@ -362,6 +362,7 @@ body.filemode #go.redo { background: var(--panel); color: var(--fg); box-shadow:
 /* 说话人识别:字幕行里的名字标签 + 侧栏(手机为底部抽屉) */
 .i-users { --ic: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'/%3E%3C/svg%3E"); }
 .row .who { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 99px; font-size: 11px; font-weight: 600; line-height: 18px; color: #fff; background: var(--c, var(--dim)); vertical-align: 1px; }
+.row .who.ai { background: transparent; color: var(--c); border: 1px dashed var(--c); line-height: 16px; }
 .row .who.unsure { background: transparent; color: var(--dim); box-shadow: inset 0 0 0 1px var(--line); font-weight: 400; }
 body.nospk .row .who { display: none; }
 #spkPanel { position: fixed; z-index: 9; left: 0; right: 0; bottom: 0; max-height: 62vh; display: flex; flex-direction: column; background: var(--panel); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; box-shadow: var(--shadow-hi); }

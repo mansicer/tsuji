@@ -78,6 +78,11 @@
     <div class="hint" id="spkMsg"></div>
     <div id="spkList"></div>
     <div class="hint" id="spkListHint" data-i18n="spk.listHint"></div>
+    <div id="spkJudgeBox" hidden>
+      <div class="btns"><button class="btn i-spark" id="spkJudge"></button></div>
+      <div class="hint" data-i18n="spk.judgeHint"></div>
+      <label class="check"><input type="checkbox" id="spkUseLlm"> <span data-i18n="spk.useLlm"></span></label>
+    </div>
     <label><span data-i18n="spk.dist"></span> <input type="range" id="spkDist" min="0.3" max="0.8" step="0.05"><small data-i18n="spk.distHint"></small></label>
     <label><span data-i18n="spk.share"></span> <input type="range" id="spkShare" min="50" max="100" step="5"><small data-i18n="spk.shareHint"></small></label>
     <label class="check"><input type="checkbox" id="spkShow"> <span data-i18n="spk.show"></span></label>
@@ -112,6 +117,7 @@
         </div>
         <label><span data-i18n="draft.desc"></span><textarea id="dDesc" rows="5"></textarea><small data-i18n="draft.descHint"></small></label>
         <label><span data-i18n="draft.style"></span><textarea id="dStyle" rows="4"></textarea><small data-i18n="draft.styleHint"></small></label>
+        <label><span data-i18n="draft.spkNotes"></span><textarea id="dSpkNotes" rows="4"></textarea><small data-i18n="draft.spkNotesHint"></small></label>
         <label><span data-i18n="draft.asr"></span><textarea id="dAsr" rows="3"></textarea><small data-i18n="draft.asrHint"></small></label>
         <div class="card">
           <h4 id="gTitle"></h4>

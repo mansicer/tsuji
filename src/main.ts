@@ -5,6 +5,7 @@ import ffmpegCore from "@ffmpeg/core?url";
 import ffmpegWasm from "@ffmpeg/core/wasm?url";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
+import { judgeSpeakers } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot } from "./spk/core";
 
 // ---------- 小工具 ----------
@@ -86,6 +87,7 @@ const I18N = {
     "draft.name": "模板名称", "draft.source": "源语言", "draft.target": "目标语言",
     "draft.desc": "背景说明", "draft.descHint": "提供给翻译模型的背景信息，例如场合、参与者及其相互关系。",
     "draft.style": "翻译风格", "draft.styleHint": "对译文的具体要求，例如称呼、语气和固定译法。",
+    "draft.spkNotes": "说话人线索", "draft.spkNotesHint": "帮助区分说话人：每人怎么自我介绍、怎么称呼自己和别人、谁负责主持、说话习惯，以及常见的出场阵容。仅用于说话人识别，不影响翻译。",
     "draft.asr": "语音识别提示", "draft.asrHint": "请使用源语言写一两句话，描述音频内容。说话人和词表会自动附加在后面。",
     "draft.gloss": "说话人与词表：{p} 位说话人，{n} 个词条", "draft.glossHint": "每行格式为：原文 | 读音 | 译文 | 备注。以 @ 开头的行表示说话人，以 # 开头的行为注释。语音识别使用原文拼写，翻译统一使用译文。",
     "draft.editText": "编辑文本", "draft.viewTable": "表格视图", "draft.save": "保存", "draft.saveStart": "保存并开始", "draft.discard": "放弃",
@@ -111,7 +113,10 @@ const I18N = {
     "spk.dist": "分组阈值", "spk.distHint": "数值越小分得越细，同一个人更容易被拆成几组；数值越大，越容易把不同的人归为一组。调整后立即重新分组，无需重新分析。",
     "spk.share": "标注所需占比", "spk.shareHint": "一句字幕中，某位说话人的时长占比达到该值才标注名字，否则标为“不确定”。",
     "spk.show": "在字幕列表、画面和导出文件中显示说话人", "spk.split": "按说话人断句", "spk.splitHint": "处理文件时，在较短的停顿处断句，且不合并短句，便于区分说话人。对下次处理生效。",
-    "spk.clear": "清除分析结果", "spk.clearSure": "再次点击以清除", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
+    "spk.clear": "清除分析结果", "spk.clearSure": "再次点击以清除", "spk.judge": "用 GPT 结合字幕判定", "spk.judgeAgain": "重新用 GPT 判定", "spk.judging": "GPT 正在结合字幕和模板判定说话人…", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
+    "spk.judgeHint": "把声纹分组结果、每句字幕和模板里的出演者与说话人线索交给 GPT:给各组认出名字,声纹不确定的句子按上下文补判。需要 API,一集约几美分。你手动起的名字优先。", "spk.useLlm": "使用 GPT 判定结果",
+    "spk.by.self_intro": "GPT 判定:自我介绍", "spk.by.addressed": "GPT 判定:被点名后回答", "spk.by.turn_taking": "GPT 判定:对话轮次", "spk.by.content": "GPT 判定:内容与说话习惯", "spk.by.voice": "GPT 判定:声纹", "spk.by.unknown": "GPT 判定",
+    "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
     "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
     "spk.done": "共 {n} 个语音片段，分为 {k} 组；已标注 {a} / {b} 句字幕。", "spk.none": "尚未分析。分析约需一两分钟，期间请保持页面打开。",
     "spk.err": "分析失败：{m}", "spk.needMedia": "需要原文件才能分析，请先重新选择原文件。", "spk.busy": "文件正在处理，请在完成或暂停后再分析。", "sec.audio": "收音", "set.audioHint": "除最后三项系统选项需停止后重新开始收音外，其余设置在点击“完成”后立即生效；麦克风切换立即生效。",
@@ -166,6 +171,7 @@ const I18N = {
     "draft.name": "Template name", "draft.source": "Source language", "draft.target": "Target language",
     "draft.desc": "Background", "draft.descHint": "Context for the translation model, such as the occasion, participants and their relationships.",
     "draft.style": "Translation style", "draft.styleHint": "Specific requirements for the translation, such as forms of address, tone and fixed renderings.",
+    "draft.spkNotes": "Speaker cues", "draft.spkNotesHint": "Helps tell speakers apart: how each person introduces themselves, what they call themselves and others, who hosts, verbal habits, and the usual line-up. Used only for speaker identification, not for translation.",
     "draft.asr": "Speech recognition hint", "draft.asrHint": "One or two sentences in the source language describing the audio. Speakers and glossary are appended automatically.",
     "draft.gloss": "Speakers and glossary: {p} speakers, {n} terms", "draft.glossHint": "One entry per line: original | reading | translation | notes. Lines beginning with @ are speakers; lines beginning with # are comments. Recognition uses the original spelling; translation uses the given rendering.",
     "draft.editText": "Edit as text", "draft.viewTable": "Table view", "draft.save": "Save", "draft.saveStart": "Save and start", "draft.discard": "Discard",
@@ -191,7 +197,10 @@ const I18N = {
     "spk.dist": "Grouping threshold", "spk.distHint": "Lower values split voices more finely, so one person is more likely to be split into several groups; higher values are more likely to put different people in one group. Changes regroup immediately without re-analyzing.",
     "spk.share": "Required share", "spk.shareHint": "A line is labeled only when one speaker accounts for at least this share of its duration; otherwise it is marked “Uncertain”.",
     "spk.show": "Show speakers in the subtitle list, on the video, and in exported files", "spk.split": "Split lines by speaker", "spk.splitHint": "When processing a file, split at shorter pauses and do not merge short lines, which helps separate speakers. Applies the next time the file is processed.",
-    "spk.clear": "Clear results", "spk.clearSure": "Tap again to clear", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
+    "spk.clear": "Clear results", "spk.clearSure": "Tap again to clear", "spk.judge": "Refine with GPT", "spk.judgeAgain": "Refine with GPT again", "spk.judging": "GPT is identifying speakers from the subtitles and template…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
+    "spk.judgeHint": "Sends the voice groups, each subtitle line and the template's people and speaker cues to GPT: it names the groups and fills in lines where the voice match is uncertain. Uses the API, a few cents per episode. Names you set take priority.", "spk.useLlm": "Use GPT results",
+    "spk.by.self_intro": "GPT: self-introduction", "spk.by.addressed": "GPT: answers when addressed", "spk.by.turn_taking": "GPT: turn-taking", "spk.by.content": "GPT: content and speaking habits", "spk.by.voice": "GPT: voice", "spk.by.unknown": "GPT",
+    "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
     "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Extracting audio…", "spk.embed": "Analyzing voices {i} / {n} clips",
     "spk.done": "{n} speech clips in {k} groups; {a} of {b} lines labeled.", "spk.none": "Not analyzed yet. Analysis takes a minute or two; keep this page open.",
     "spk.err": "Analysis failed: {m}", "spk.needMedia": "The original file is required. Select it again first.", "spk.busy": "The file is being processed. Analyze after it finishes or is paused.", "sec.audio": "Audio capture", "set.audioHint": "All settings take effect when you tap Done, except the last three system options, which require stopping and restarting. Microphone changes apply immediately.",
@@ -253,7 +262,7 @@ function allTemplates() {
 }
 function getTemplate(id) { return allTemplates().find((x) => x.id === id); }
 function putTemplate(tp) {
-  const clean = { id: tp.id, name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", glossary: tp.glossary || "", updatedAt: Date.now() };
+  const clean = { id: tp.id, name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "", updatedAt: Date.now() };
   store.set("templates", JSON.stringify(userTemplates().filter((x) => x.id !== tp.id).concat(clean)));
   if (cfg.tpl && cfg.tpl.id === tp.id) refreshTemplate();
 }
@@ -358,7 +367,7 @@ function migrateToSessions() {
 
 function loadSettings() {
   $("#spkDist").value = sget("spkDist", "0.5"); $("#spkShare").value = sget("spkShare", "85");
-  $("#spkShow").checked = sget("spkShow", "1") === "1"; $("#spkSplit").checked = spkSplit();
+  $("#spkShow").checked = sget("spkShow", "1") === "1"; $("#spkUseLlm").checked = spkUseLlm(); $("#spkSplit").checked = spkSplit();
   document.body.classList.toggle("nospk", !$("#spkShow").checked);
   $("#uiLang").value = uiLang;
   $("#apiKey").value = store.get("apiKey", "");
@@ -480,7 +489,7 @@ function saveLines() {
   const key = linesKey();
   const ss = curSess;
   saveLinesTimer = setTimeout(() => {
-    store.set(key, JSON.stringify(lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc } : {}) }))));
+    store.set(key, JSON.stringify(lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}) }))));
     if (ss) { ss.count = lines.length; ss.updatedAt = Date.now(); saveSessions(); }
   }, 500);
 }
@@ -491,7 +500,7 @@ function restoreLines() {
     const line = addLine(s.id, s.raw);
     line.src = s.src ?? s.ja ?? s.raw; line.tgt = s.tgt ?? s.zh ?? ""; line.t = new Date(s.t);
     if (s.s != null) setLineTime(line, s.s, s.e);
-    if (s.k != null) { line.spk = s.k; line.spc = s.kc; paintSpk(line); }
+    if (s.k != null) { line.spk = s.k; line.spc = s.kc; if (s.kb) line.spkBy = s.kb; paintSpk(line); }
     if (s.done) { line.done = true; renderLine(line, false); }
     else { line.el.className = "row"; line.el.querySelector(".tgt").textContent = t("line.unfinished"); }
     if (line.done && line.src) history.push(line);
@@ -1201,13 +1210,15 @@ const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8
 let spk = null, spkBusy = false, spkStopAt = null, spkModelP = null;
 function spkSplit() { return sget("spkSplit", "1") === "1"; }
 function spkPrefix(l) { return l.spk && $("#spkShow").checked ? l.spk + (CJK.test(l.tgt || l.src || "") ? "：" : ": ") : ""; }
-function spkName(c) { return (spk.names[c] || "").trim() || t("spk.n", { n: c + 1 }); }
+function spkName(c) { return (spk.names[c] || "").trim() || (spkUseLlm() && spk.llm && spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
+function spkUseLlm() { return sget("spkLlm", "1") === "1"; }
 function paintSpk(l) {
   const tm = l.el.querySelector(".tm"); if (!tm) return;
   let w = tm.querySelector(".who");
   if (l.spk == null) { if (w) w.remove(); return; }
   if (!w) tm.append(w = el("span", { className: "who" }));
   w.textContent = l.spk || t("spk.unsure"); w.classList.toggle("unsure", !l.spk); w.style.setProperty("--c", l.spk ? SPK_COLORS[(l.spc || 0) % SPK_COLORS.length] : "");
+  w.classList.toggle("ai", !!l.spkBy); w.title = l.spkBy ? t("spk.by." + l.spkBy) : "";
 }
 // onnxruntime-web 的 wasm(14 MB)和声纹模型都随页面同源发布;模型 28 MB,边下边显示进度
 function loadSpkModel(onPct) {
@@ -1232,10 +1243,10 @@ async function spkLoad() {
   const sid = curSess.id, rec = await idb.get("spk:" + sid).catch(() => null);
   if (!curSess || curSess.id !== sid) return null;
   spk = rec ? { ...rec, sid } : null;
-  if (spk) spkRecluster(false);
+  if (spk) spkRecluster(false, true);
   return spk;
 }
-function spkSave() { if (spk) idb.put("spk:" + spk.sid, { segs: spk.segs, emb: spk.emb, n: spk.n, cents: spk.cents, names: spk.names }).catch(() => {}); }
+function spkSave() { if (spk) idb.put("spk:" + spk.sid, { segs: spk.segs, emb: spk.emb, n: spk.n, cents: spk.cents, names: spk.names, llm: spk.llm || null }).catch(() => {}); }
 async function spkAnalyze() {
   const ss = curSess;
   if (!ss || spkBusy) return;
@@ -1265,7 +1276,7 @@ async function spkAnalyze() {
 }
 // 分组:长片段聚类(最多取最长的 600 段),太小的组(少于 3 段且不到 3%)并进最近的组;组按总时长排序。
 // 重新分组后,和旧的组声纹很像的沿用旧名字
-function spkRecluster(inherit) {
+function spkRecluster(inherit, keepLlm) {
   const { n, segs, emb } = spk, vec = (i) => emb.subarray(i * SPK_DIM, (i + 1) * SPK_DIM), dur = (i) => segs[2 * i + 1] - segs[2 * i];
   let long = []; for (let i = 0; i < n; i++) if (dur(i) >= 1.5) long.push(i);
   if (long.length > 600) long = long.sort((a, b) => dur(b) - dur(a)).slice(0, 600);
@@ -1286,6 +1297,8 @@ function spkRecluster(inherit) {
     const best = (v, arr) => { let b = -1, bs = 0.8; arr.forEach((o, k) => { const s2 = spkDot(v, o); if (s2 >= bs) { bs = s2; b = k; } }); return b; };
     spk.names = cents.map((c, k) => { const o = best(c, oldC); return o >= 0 && best(oldC[o], cents) === k ? oldN[o] || "" : ""; });
   }
+  const same = spk.cents && spk.cents.length === cents.length * SPK_DIM && cents.every((c, k) => spkDot(c, spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)) > 0.999);
+  if (!keepLlm && !same) spk.llm = null; // 分组变了,之前的 LLM 判定对不上组号,作废
   spk.cents = new Float32Array(cents.length * SPK_DIM); cents.forEach((c, k) => spk.cents.set(c, k * SPK_DIM));
   spk.groups = cents.map((_, k) => {
     let d = 0, cnt = 0, best = -1, bs = -2;
@@ -1295,41 +1308,86 @@ function spkRecluster(inherit) {
   });
   spkVote();
 }
-// 每句字幕:和它重叠的片段按时长投票(1.5 秒以下的片段权重减半),同名的组合并计票
+// 每句字幕:和它重叠的片段按时长投票(1.5 秒以下的片段权重减半),同名的组合并计票;
+// 按组的候选分布记在 l.spkV(给 LLM 判定用)。有 LLM 判定且开着时:声纹不确定的句子用 LLM 的结论;
+// 声纹确定的句子只在 LLM 有明确证据(自我介绍、被点名后回答)时改判
 function spkVote() {
   if (!spk) return;
   const share = Number(sget("spkShare", "85")) / 100, { n, segs } = spk, color = {};
   spk.groups.forEach((_, k) => { const nm = spkName(k); if (!(nm in color)) color[nm] = k; });
+  const llm = spkUseLlm() && spk.llm ? new Map(spk.llm.lines.map(([id, who, basis]) => [id, { who, basis }])) : null;
+  const llmName = (who) => (/^G\d+$/.test(who) ? spkName(Number(who.slice(1)) - 1) : who);
   let tagged = 0, timed = 0;
   for (const l of lines) {
     if (l.ms == null) continue;
     timed++;
-    const s = l.ms / 1000, e = l.endMs / 1000, vote = {}; let sum = 0;
+    const s = l.ms / 1000, e = l.endMs / 1000, vote = {}, gv = {}; let sum = 0;
     for (let i = 0; i < n; i++) {
       const ov = Math.min(e, segs[2 * i + 1]) - Math.max(s, segs[2 * i]);
       if (ov <= 0) continue;
       const w = ov * (segs[2 * i + 1] - segs[2 * i] >= 1.5 ? 1 : 0.5), nm = spkName(spk.lab[i]);
-      vote[nm] = (vote[nm] || 0) + w; sum += w;
+      vote[nm] = (vote[nm] || 0) + w; gv[spk.lab[i]] = (gv[spk.lab[i]] || 0) + w; sum += w;
     }
-    const top = Object.entries(vote).sort((a, b) => b[1] - a[1])[0];
-    if (!top) delete l.spk; else if (top[1] / sum >= share - 1e-9) { l.spk = top[0]; l.spc = color[top[0]]; tagged++; } else { l.spk = ""; delete l.spc; }
+    l.spkV = Object.entries(gv).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, w]) => [Number(k), w / sum]);
+    const top = Object.entries(vote).sort((a, b) => b[1] - a[1])[0], sure = top && top[1] / sum >= share - 1e-9;
+    delete l.spkBy;
+    if (!top) delete l.spk; else if (sure) l.spk = top[0]; else l.spk = "";
+    const j = llm && llm.get(l.id);
+    if (j && j.who) {
+      const nm = llmName(j.who);
+      if (nm !== l.spk && (!sure || j.basis === "self_intro" || j.basis === "addressed")) { l.spk = nm; l.spkBy = j.basis; }
+    }
+    if (l.spk) { if (!(l.spk in color)) color[l.spk] = Object.keys(color).length; l.spc = color[l.spk]; tagged++; } else delete l.spc;
     paintSpk(l);
   }
   spk.tagged = tagged; spk.timed = timed;
   saveLines();
 }
+// LLM 判定:声纹候选 + 字幕文本 + 模板(背景、说话人线索、出演者)→ 每组的名字、每句的说话人
+let spkJudging = false;
+async function spkJudge() {
+  const ss = curSess;
+  if (!spk || spkJudging || !ss) return;
+  if (!cfg.hasKey) { openSettings(); $("#apiKey").focus(); return; }
+  spkJudging = true; renderSpk(); spkMsg(t("spk.judging"));
+  try {
+    const g = cfg.glossary, tl = lines.filter((l) => l.ms != null && (l.src || l.raw));
+    const r = await judgeSpeakers({
+      lines: tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [] })),
+      groups: spk.groups.map((gr, k) => ({ k, name: (spk.names[k] || "").trim(), dur: gr.dur })),
+      description: cfg.tpl.description || "", spkNotes: cfg.tpl.spkNotes || "", people: g.people,
+      share: Number(sget("spkShare", "85")) / 100,
+    }, async (system, user, schema) => {
+      const res = await fetch(cfg.apiBase + "/chat/completions", { method: "POST", headers: apiHeaders(), body: JSON.stringify({
+        model: cfg.ctModel, reasoning_effort: "medium", messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        response_format: { type: "json_schema", json_schema: { name: "speakers", strict: true, schema } } }) });
+      if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const data = await res.json(); addMtCost(cfg.ctModel, data.usage);
+      return JSON.parse(data.choices[0].message.content);
+    });
+    if (curSess !== ss) return;
+    const names = spk.groups.map(() => ""); for (const x of r.groups) if (x.name) names[x.k] = x.name;
+    spk.llm = { names, lines: [...r.lines].map(([id, v]) => [id, v.who, v.basis]), at: Date.now() };
+    spkVote(); spkSave();
+  } catch (e) { console.error(e); spkMsg(t("spk.err", { m: e.message || String(e) })); spkJudging = false; renderSpk(false); return; }
+  finally { spkJudging = false; }
+  if (curSess === ss) renderSpk();
+}
 async function spkRevote(ss) { if (curSess !== ss) return; if (await spkLoad()) { spkVote(); if (!$("#spkPanel").hidden) renderSpk(); } }
 function spkMsg(m) { $("#spkMsg").textContent = m; }
 function spkBar(p) { $("#spkBar").hidden = p == null; if (p != null) $("#spkBar i").style.width = Math.round(p * 1000) / 10 + "%"; }
 function spkPanel(on) { $("#spkPanel").hidden = !on; document.body.classList.toggle("spkopen", on); }
-function renderSpk() {
-  $("#spkRun").textContent = t(spk ? "spk.rerun" : "spk.run"); $("#spkRun").disabled = spkBusy;
+function renderSpk(msg = true) {
+  $("#spkRun").textContent = t(spk ? "spk.rerun" : "spk.run"); $("#spkRun").disabled = spkBusy || spkJudging;
+  $("#spkJudgeBox").hidden = !spk; $("#spkJudge").disabled = spkBusy || spkJudging;
+  $("#spkJudge").textContent = t(spk && spk.llm ? "spk.judgeAgain" : "spk.judge");
   $("#spkClear").hidden = !spk; $("#spkListHint").hidden = !spk;
   const list = $("#spkList"); list.replaceChildren();
   if (!spk) { if (!spkBusy) spkMsg(t(mediaBlob ? "spk.none" : "spk.needMedia")); return; }
-  if (!spkBusy) spkMsg(t("spk.done", { n: spk.n, k: spk.groups.length, a: spk.tagged, b: spk.timed }));
+  if (!spkBusy && !spkJudging && msg) spkMsg(t("spk.done", { n: spk.n, k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm && spkUseLlm() ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
   spk.groups.forEach((g, k) => {
-    const inp = el("input", { type: "text", value: spk.names[k] || "", placeholder: t("spk.n", { n: k + 1 }) });
+    const ai = spkUseLlm() && spk.llm && spk.llm.names[k];
+    const inp = el("input", { type: "text", value: spk.names[k] || "", placeholder: ai ? ai + " · AI" : t("spk.n", { n: k + 1 }) });
     inp.onchange = () => { spk.names[k] = inp.value.trim(); spkVote(); spkSave(); renderSpk(); };
     inp.onkeydown = (e) => { if (e.key === "Enter") inp.blur(); };
     const play = el("button", { className: "btn i-play", textContent: t("spk.play"), onclick: () => { const i = g.sample; if (i < 0) return; seekTo(spk.segs[2 * i] * 1000); spkStopAt = spk.segs[2 * i + 1] * 1000 + 200; } });
@@ -1339,6 +1397,8 @@ function renderSpk() {
 $("#spkOpen").onclick = async () => { spkPanel(true); renderSpk(); await spkLoad(); renderSpk(); };
 $("#spkClose").onclick = () => spkPanel(false);
 $("#spkRun").onclick = spkAnalyze;
+$("#spkJudge").onclick = spkJudge;
+$("#spkUseLlm").onchange = () => { sset("spkLlm", $("#spkUseLlm").checked ? null : "0"); if (spk) { spkVote(); renderSpk(); } };
 $("#spkDist").oninput = () => { sset("spkDist", $("#spkDist").value === "0.5" ? null : $("#spkDist").value); updateRangeFill(); clearTimeout(spkDistT); spkDistT = setTimeout(() => { if (spk) { spkRecluster(true); spkSave(); renderSpk(); } }, 250); };
 let spkDistT = null;
 $("#spkShare").oninput = () => { sset("spkShare", $("#spkShare").value === "85" ? null : $("#spkShare").value); updateRangeFill(); if (spk) { spkVote(); renderSpk(); } };
@@ -1349,7 +1409,7 @@ $("#spkClear").onclick = () => {
   if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = t("spk.clearSure"); setTimeout(() => { delete b.dataset.armed; b.textContent = t("spk.clear"); }, 3000); return; }
   delete b.dataset.armed; b.textContent = t("spk.clear");
   if (spk) idb.del("spk:" + spk.sid).catch(() => {});
-  spk = null; for (const l of lines) { delete l.spk; delete l.spc; paintSpk(l); }
+  spk = null; for (const l of lines) { delete l.spk; delete l.spc; delete l.spkBy; paintSpk(l); }
   saveLines(); renderSpk();
 };
 
@@ -1422,9 +1482,9 @@ function download(name, text, type = "text/plain") {
   document.body.append(a); a.click(); a.remove();
 }
 function exportTemplate(tp) {
-  const { id, name, source, target, description, style, asrPrompt, glossary } = tp;
+  const { id, name, source, target, description, style, asrPrompt, spkNotes, glossary } = tp;
   download((name || "template").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60) + ".json",
-    JSON.stringify({ format: "live-subs-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, glossary } }, null, 2), "application/json");
+    JSON.stringify({ format: "live-subs-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, spkNotes, glossary } }, null, 2), "application/json");
 }
 $("#importTpl").onclick = () => $("#importFile").click();
 $("#importFile").onchange = async (e) => {
@@ -1444,9 +1504,9 @@ $("#newTpl").onclick = () => openCreator(null);
 let creator = store.json("creator", null) || { editId: null, draft: null, msgs: [], prevId: null };
 let creatorBusy = false, glossTextMode = false;
 function saveCreator() { store.set("creator", JSON.stringify(creator)); }
-function blankDraft() { return { name: "", source: "ja", target: uiLang === "zh" ? "zh-Hans" : "en", description: "", style: "", asrPrompt: "", glossary: "" }; }
+function blankDraft() { return { name: "", source: "ja", target: uiLang === "zh" ? "zh-Hans" : "en", description: "", style: "", asrPrompt: "", spkNotes: "", glossary: "" }; }
 function openCreator(tp) {
-  const d = tp ? { name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", glossary: tp.glossary || "" } : blankDraft();
+  const d = tp ? { name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "" } : blankDraft();
   creator = { editId: tp ? tp.id : null, draft: d, msgs: [{ role: "note", text: tp ? t("create.welcomeEdit", { name: tp.name }) : t("create.welcome") }], prevId: null };
   attachments = []; renderAttachments();
   saveCreator(); glossTextMode = false; setTab("chat"); show("create");
@@ -1480,7 +1540,7 @@ function renderChat() {
 function renderDraft() {
   const d = creator.draft;
   $("#dName").value = d.name; $("#dSource").value = d.source; $("#dTarget").value = d.target;
-  $("#dDesc").value = d.description; $("#dStyle").value = d.style; $("#dAsr").value = d.asrPrompt; $("#dGlossText").value = d.glossary;
+  $("#dDesc").value = d.description; $("#dStyle").value = d.style; $("#dAsr").value = d.asrPrompt; $("#dSpkNotes").value = d.spkNotes || ""; $("#dGlossText").value = d.glossary;
   renderGlossTable();
 }
 function renderGlossTable() {
@@ -1495,7 +1555,7 @@ function renderGlossTable() {
 function renderCreator() { if (!creator.draft) creator.draft = blankDraft(); renderChat(); renderDraft(); }
 $("#gToggle").onclick = () => { glossTextMode = !glossTextMode; renderGlossTable(); };
 // 草稿手动修改随时存;下一轮对话会把当前草稿一起发给 GPT
-for (const [sel, key] of [["#dName", "name"], ["#dSource", "source"], ["#dTarget", "target"], ["#dDesc", "description"], ["#dStyle", "style"], ["#dAsr", "asrPrompt"], ["#dGlossText", "glossary"]]) {
+for (const [sel, key] of [["#dName", "name"], ["#dSource", "source"], ["#dTarget", "target"], ["#dDesc", "description"], ["#dStyle", "style"], ["#dAsr", "asrPrompt"], ["#dSpkNotes", "spkNotes"], ["#dGlossText", "glossary"]]) {
   $(sel).addEventListener("input", () => { creator.draft[key] = $(sel).value; saveCreator(); if (key === "glossary") renderGlossTable(); });
   $(sel).addEventListener("change", () => { creator.draft[key] = $(sel).value; saveCreator(); });
 }
@@ -1505,10 +1565,10 @@ const CREATOR_SCHEMA = {
   type: "object", additionalProperties: false, required: ["reply", "template"],
   properties: {
     reply: { type: "string" },
-    template: { type: "object", additionalProperties: false, required: ["name", "source", "target", "description", "style", "asrPrompt", "speakers", "terms"],
+    template: { type: "object", additionalProperties: false, required: ["name", "source", "target", "description", "style", "asrPrompt", "spkNotes", "speakers", "terms"],
       properties: {
         name: { type: "string" }, source: { type: "string", enum: Object.keys(LANGS) }, target: { type: "string", enum: Object.keys(TARGETS) },
-        description: { type: "string" }, style: { type: "string" }, asrPrompt: { type: "string" },
+        description: { type: "string" }, style: { type: "string" }, asrPrompt: { type: "string" }, spkNotes: { type: "string" },
         speakers: { type: "array", items: ENTRY }, terms: { type: "array", items: ENTRY },
       } },
   },
@@ -1531,13 +1591,14 @@ Rules:
 - terms: roughly 30-150 entries most likely to be misheard or mistranslated: show/event names, segment/corner names, titles of works, character names, places, jargon, catchphrases, nicknames. Precision over volume; add "unverified" in notes when a fact comes from a single weak source.
 - description: 3-8 sentences of background, written in the target language (who, what, when, where, format, running jokes).
 - style: concrete translation guidance written in the target language (tone, honorifics, how to render nicknames, what to leave untranslated).
+- spkNotes: cues that help tell the speakers apart in a recording, written in the target language, one short paragraph per speaker: how they introduce themselves, what they call themselves and others, who usually leads/hosts, typical role in the conversation, verbal habits. Also the usual line-up/format (e.g. which people appear together, rotating hosts). Only well-sourced facts; empty string if nothing useful is known.
 - asrPrompt: one or two natural sentences in the SOURCE language describing the audio (e.g. "日本語のラジオ番組の公開イベントの音声。"). No lists; names are appended automatically.
 - name: short template name.
 - reply: a short message to the user written in ${uiLang === "zh" ? "Simplified Chinese" : "English"}: what you found or changed, key sources as plain URLs, and at most two questions. Plain text only, no Markdown. Do not repeat the whole glossary in reply.`;
 function draftForGPT() {
   const d = creator.draft, g = parseGlossary(d.glossary);
   const ent = (e) => ({ text: e.src, reading: e.reading, translation: e.tgt, notes: e.notes });
-  return { name: d.name, source: d.source, target: d.target, description: d.description, style: d.style, asrPrompt: d.asrPrompt, speakers: g.people.map(ent), terms: g.terms.map(ent) };
+  return { name: d.name, source: d.source, target: d.target, description: d.description, style: d.style, asrPrompt: d.asrPrompt, spkNotes: d.spkNotes || "", speakers: g.people.map(ent), terms: g.terms.map(ent) };
 }
 // 附件:课件、论文等随本轮消息发给 Responses API(PDF/Office 用 input_file,图片用 input_image,纯文本直接读出)
 const ATTACH_MAX_MB = 40;
@@ -1651,7 +1712,7 @@ async function creatorSend() {
     const out = JSON.parse(((msg && msg.content) || []).map((c) => c.text || "").join(""));
     const tp = out.template;
     creator.prevId = d.id;
-    creator.draft = { name: tp.name, source: tp.source, target: tp.target, description: tp.description, style: tp.style, asrPrompt: tp.asrPrompt, glossary: glossaryText(tp.speakers, tp.terms) };
+    creator.draft = { name: tp.name, source: tp.source, target: tp.target, description: tp.description, style: tp.style, asrPrompt: tp.asrPrompt, spkNotes: tp.spkNotes, glossary: glossaryText(tp.speakers, tp.terms) };
     creator.msgs.push({ role: "ai", text: out.reply });
     creator.msgs.push({ role: "note", text: t("create.updated", { p: tp.speakers.length, n: tp.terms.length }) });
   } catch (e) {
