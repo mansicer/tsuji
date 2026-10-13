@@ -11,7 +11,7 @@ set -a; . ./.env.selfhost; set +a
 npm run build:selfhost
 NEW="$DEPLOY_DIR.new" OLD="$DEPLOY_DIR.old"
 ssh "$DEPLOY_HOST" "rm -rf '$NEW' && mkdir -p '$NEW'"
-rsync -rz --delete --chmod=D755,F644 dist/ "$DEPLOY_HOST:$NEW/"
-ssh "$DEPLOY_HOST" "set -e; cd '$NEW' && find . -type f \\( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' \\) -size +1k -exec gzip -9 -k -f {} +
+rsync -rz --delete dist/ "$DEPLOY_HOST:$NEW/"
+ssh "$DEPLOY_HOST" "set -e; cd '$NEW' && chmod -R u=rwX,go=rX . && find . -type f \\( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' \\) -size +1k -exec gzip -9 -k -f {} +
 rm -rf '$OLD'; [ -d '$DEPLOY_DIR' ] && mv '$DEPLOY_DIR' '$OLD'; mv '$NEW' '$DEPLOY_DIR'"
 echo "已发布 $(git rev-parse --short HEAD) → $DEPLOY_HOST:$DEPLOY_DIR"
