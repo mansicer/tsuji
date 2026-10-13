@@ -398,3 +398,20 @@ body.filemode #log { -webkit-mask-image: linear-gradient(to bottom, transparent 
 }
 /* 手机上视频小:叠加字幕只留译文(原文在下面列表里),免得盖住画面 */
 @media (max-width: 600px) { #ovl .os, #ovl br { display: none; } #ovl { bottom: 48px; } }
+/* 文件会话底栏:一行排开 —— 左边状态,右边说话人/SRT/VTT 和主按钮;进度是底栏顶边的一条细线;实时收音的统计条不显示 */
+body.filemode footer { position: relative; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 6px; align-items: center; }
+body.filemode #infobar { display: none; }
+body.filemode #partial { grid-column: 1 / -1; min-height: 0; }
+body.filemode #partial:empty { display: none; }
+body.filemode #fileBar { display: contents; }
+body.filemode #fileBar .pbar { position: absolute; left: 0; right: 0; top: -1px; height: 3px; border-radius: 0; background: transparent; }
+body.filemode .pinfo { grid-column: 1; margin-top: 0; }
+body.filemode .controls { grid-column: 2; display: flex; }
+body.filemode .controls .ctlSide { display: none; }
+body.filemode #go { min-width: 0; padding: 7px 16px; font-size: 14px; box-shadow: none; }
+body.filemode #go::before { width: 14px; height: 14px; }
+@media (max-width: 600px) {
+  body.filemode footer { grid-template-columns: minmax(0, 1fr); }
+  body.filemode .controls { grid-column: 1; }
+  body.filemode #go { flex: 1; padding: 10px 16px; }
+}
