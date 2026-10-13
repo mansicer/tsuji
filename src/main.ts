@@ -1275,10 +1275,12 @@ async function spkAnalyze() {
     }
     if (curSess !== ss) return;
     const pcm = fileJob.pcm, segs = spkSegments(pcm, 24000), n = segs.length, emb = new Float32Array(n * SPK_DIM);
+    // 模型在主线程里跑,await 不会真的把控制权还给浏览器:每 40 ms 主动让一次,页面才能响应、进度条才会刷新
+    let yieldAt = performance.now();
     for (let i = 0; i < n; i++) {
       if (curSess !== ss) return;
       emb.set(await spkEmbed(model, spkResample(pcm, Math.round(segs[i][0] * 24000), Math.round(segs[i][1] * 24000))), i * SPK_DIM);
-      if (i % 4 === 0) { spkBar(i / n); spkMsg(t("spk.embed", { i, n })); }
+      if (performance.now() - yieldAt > 40) { spkBar(i / n); spkMsg(t("spk.embed", { i, n })); await new Promise((r) => setTimeout(r, 0)); yieldAt = performance.now(); }
     }
     const old = spk && spk.sid === ss.id ? spk : null;
     spk = { sid: ss.id, segs: Float32Array.from(segs.flat()), emb, n, cents: old ? old.cents : null, names: old ? old.names : [] };
