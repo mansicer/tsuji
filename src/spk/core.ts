@@ -98,3 +98,30 @@ export function spkCluster(vecs: Vec[], dist: number): Int32Array {
 }
 export function spkNorm(v: Vec): Float32Array { let s = 0; for (let d = 0; d < v.length; d++) s += v[d] * v[d]; s = Math.sqrt(s) || 1; return Float32Array.from(v as ArrayLike<number>, (x) => x / s); }
 export function spkDot(a: Vec, b: Vec): number { let s = 0; for (let d = 0; d < a.length; d++) s += a[d] * b[d]; return s; }
+/**
+ * 前后文平滑(Viterbi):短片段单看声纹不可靠,结合前后片段一起定。
+ * segs = 按时间排好的 [s0, e0, s1, e1, ...](秒);sims = 每段与各组质心的余弦(n×K 行优先)。
+ * 发射分 = 相似度 / temp × min(时长, 4 秒);换人惩罚 = pen × e^(-停顿秒数),停顿越长越容易换人。
+ * temp 0.1 / pen 1.0 在 MyGO #198(声优回)、#199(角色回)官方字幕颜色标注上都最好(按时长准确率 85.7→87.7%、98.9→99.8%)。
+ */
+export function spkSmooth(segs: ArrayLike<number>, sims: ArrayLike<number>, K: number, temp = 0.1, pen = 1.0): Int16Array {
+  const n = segs.length / 2, lab = new Int16Array(n);
+  if (!n || K < 2) return lab;
+  const V = new Float64Array(K), NV = new Float64Array(K), B = new Int16Array(n * K);
+  const emit = (i: number, k: number) => (sims[i * K + k] / temp) * Math.min(segs[2 * i + 1] - segs[2 * i], 4);
+  for (let k = 0; k < K; k++) V[k] = emit(0, k);
+  for (let i = 1; i < n; i++) {
+    const p = pen * Math.exp(-Math.max(0, segs[2 * i] - segs[2 * i - 1]));
+    let best = 0; for (let k = 1; k < K; k++) if (V[k] > V[best]) best = k;
+    for (let k = 0; k < K; k++) {
+      const stay = V[k], move = V[best] - p; // 从别的组转过来:只需看最好的那个(和自己相同时就是 stay)
+      if (best === k || stay >= move) { NV[k] = stay; B[i * K + k] = k; } else { NV[k] = move; B[i * K + k] = best; }
+      NV[k] += emit(i, k);
+    }
+    let m = -Infinity; for (let k = 0; k < K; k++) if (NV[k] > m) m = NV[k];
+    for (let k = 0; k < K; k++) V[k] = NV[k] - m; // 防止数值越来越大
+  }
+  let k = 0; for (let j = 1; j < K; j++) if (V[j] > V[k]) k = j;
+  for (let i = n - 1; i >= 0; i--) { lab[i] = k; k = B[i * K + k]; }
+  return lab;
+}

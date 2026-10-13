@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { spkCluster, spkFbank, spkNorm, spkResample, spkSegments } from "../src/spk/core";
+import { spkCluster, spkFbank, spkNorm, spkResample, spkSegments, spkSmooth } from "../src/spk/core";
 
 const tone = (sr: number, sec: number, hz: number, amp: number) => Int16Array.from({ length: Math.round(sr * sec) }, (_, i) => Math.round(amp * Math.sin((2 * Math.PI * hz * i) / sr)));
 const cat = (...xs: Int16Array[]) => { const o = new Int16Array(xs.reduce((n, x) => n + x.length, 0)); let p = 0; for (const x of xs) { o.set(x, p); p += x.length; } return o; };
@@ -26,5 +26,11 @@ describe("spk core", () => {
     const a = [[1, 0.1, 0], [1, 0, 0.1], [0.9, 0.1, 0.1]], b = [[0, 1, 0.1], [0.1, 1, 0], [0, 0.9, 0.2]];
     const lab = spkCluster([...a, ...b].map(spkNorm), 0.5);
     expect(new Set(lab.slice(0, 3)).size).toBe(1); expect(new Set(lab.slice(3)).size).toBe(1); expect(lab[0]).not.toBe(lab[3]);
+  });
+  it("平滑:夹在同一人长段之间、声纹略偏向别人的短段,归回这个人;长停顿后的换人保留", () => {
+    // 段:A 长 | 短段(略像 B) | A 长 | 停顿 3 秒 | B 长
+    const segs = [0, 4, 4.1, 4.6, 4.7, 9, 12, 16];
+    const sims = [0.8, 0.2, 0.45, 0.55, 0.8, 0.2, 0.2, 0.8];
+    expect(Array.from(spkSmooth(segs, sims, 2))).toEqual([0, 0, 0, 1]);
   });
 });

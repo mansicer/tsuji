@@ -5,8 +5,8 @@ import ffmpegCore from "@ffmpeg/core?url";
 import ffmpegWasm from "@ffmpeg/core/wasm?url";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
-import { judgeSpeakers } from "./spk/judge";
-import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot } from "./spk/core";
+import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
+import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 
 // ---------- 小工具 ----------
 const $ = (s) => document.querySelector(s);
@@ -109,14 +109,14 @@ const I18N = {
     "set.micDev": "麦克风", "opt.micDefault": "系统默认", "opt.micN": "麦克风 {n}", "opt.micMissing": "之前选择的麦克风（当前未连接）", "set.micDevHint": "收音中切换会立即改用新的麦克风。", "set.micDevNoLabel": "开始收音并允许使用麦克风后，这里会显示各设备的名称。", "flash.micFallback": "所选麦克风不可用，已改用系统默认麦克风。", "u.x": "{v}×", "u.ms": "{v} 毫秒", "u.s": "{v} 秒", "u.px": "{v} px", "u.pct": "{v}%",
     "spk.btn": "说话人", "spk.title": "说话人识别", "spk.beta": "实验功能", "spk.close": "关闭",
    
-    "spk.listHint": "可以直接给组起名字。同一个人被分成几组时，把这些组改成相同的名字就会合并。点击“试听”可听该组最有代表性的一段。",
+   
    
    
    
     "spk.judging": "GPT 正在根据 {n} 句字幕判定说话人，已用 {s} 秒(一集通常需要几十秒)……", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
    
     "spk.by.self_intro": "GPT 判定:自我介绍", "spk.by.addressed": "GPT 判定:被点名后回答", "spk.by.turn_taking": "GPT 判定:对话轮次", "spk.by.content": "GPT 判定:内容与说话习惯", "spk.by.voice": "GPT 判定:声纹", "spk.by.unknown": "GPT 判定",
-    "sec.spk": "说话人", "spk.settings": "显示与分组设置", "spk.on": "识别说话人", "spk.onHint": "开启后自动标出每句字幕是谁说的：先在本机分析声音并分组(首次需下载约 40 MB 组件，不消耗 API)，再由 GPT 结合字幕内容和当前模板的出演者、说话人线索确定每组是谁、补全声音不够确定的句子(消耗 API，一集约几美分)。文件处理完成后自动进行，已处理完的文件开启后立即开始。结果显示在字幕、画面和导出文件中，关闭后隐藏但不删除。", "spk.introOff": "说话人识别未开启。开启后会自动标出每句字幕是谁说的。", "spk.introOn": "下面是识别出的各组说话人。可以直接改名字：同一个人被分成几组时，改成相同的名字即可合并；改完点“重新识别”，GPT 会以你的名字为准重新判定。", "spk.enable": "开启说话人识别", "spk.start": "开始识别", "spk.rerun": "重新识别", "spk.none": "尚未识别。点击“开始识别”。", "spk.wait": "文件处理完成后会自动识别。", "spk.needKey": "GPT 判定需要 API 密钥，请先在设置中填写。", "spk.done": "已分为 {k} 组，标注 {a} / {b} 句字幕。", "file.spk": "已完成字幕 · 说话人识别：{m}", "spk.confirm": "开启前请确认：首次使用需要下载约 40 MB 的声音分析组件(之后由浏览器缓存)，建议在 Wi-Fi 下进行；每个文件识别时还会调用一次 GPT，按 API 计费，一集约几美分。", "spk.confirmOk": "确认开启", "spk.confirmNo": "暂不开启", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
+    "sec.spk": "说话人", "spk.settings": "说话人设置", "spk.on": "识别说话人", "spk.onHint": "开启后自动标出每句字幕是谁说的：先在本机分析声音并分组(首次需下载约 40 MB 组件，不消耗 API)，再由 GPT 结合字幕内容和当前模板的出演者、说话人线索确定每组是谁、补全声音不够确定的句子(消耗 API，一集约几美分)。文件处理完成后自动进行，已处理完的文件开启后立即开始。结果显示在字幕、画面和导出文件中，关闭后隐藏但不删除。", "spk.introOff": "说话人识别未开启。开启后会自动标出每句字幕是谁说的。", "spk.introOn": "下面是按声音分出的各组和认出的名字。名字不对可以直接改，改完点“重新识别”，GPT 会以你的名字为准重新判定；几组改成同一个名字即合并。点“试听”可听该组最有代表性的一段。", "spk.enable": "开启说话人识别", "spk.start": "开始识别", "spk.rerun": "重新识别", "spk.none": "尚未识别。点击“开始识别”。", "spk.wait": "文件处理完成后会自动识别。", "spk.needKey": "GPT 判定需要 API 密钥，请先在设置中填写。", "spk.done": "已分为 {k} 组，标注 {a} / {b} 句字幕。", "file.spk": "已完成字幕 · 说话人识别：{m}", "spk.confirm": "开启前请确认：首次使用需要下载约 40 MB 的声音分析组件(之后由浏览器缓存)，建议在 Wi-Fi 下进行；每个文件识别时还会调用一次 GPT，按 API 计费，一集约几美分。", "spk.confirmOk": "确认开启", "spk.confirmNo": "暂不开启", "spk.saveVoices": "把这些声音存进模板", "spk.saveVoicesHint": "确认各组名字无误后保存。之后用同一个模板处理文件时，会自动对照这些声音来认人，减少认错。只保存声音特征(每人约 1 KB)，不保存录音；同名的会和已存的合并。", "spk.saved": "已存入模板：{names}", "spk.lib": "模板声纹库：{names}", "spk.libNone": "模板声纹库：暂无", "spk.libMatch": "像声纹库里的 {name}", "spk.clearVoices": "清空声纹库", "spk.clearVoicesSure": "再次点击以清空", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
     "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在重新提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
    
     "spk.err": "分析失败：{m}", "spk.needMedia": "需要原文件才能分析，请先重新选择原文件。", "spk.busy": "文件正在处理，请在完成或暂停后再分析。", "sec.audio": "收音", "set.audioHint": "除最后三项系统选项需停止后重新开始收音外，其余设置在点击“完成”后立即生效；麦克风切换立即生效。",
@@ -193,14 +193,14 @@ const I18N = {
     "set.micDev": "Microphone", "opt.micDefault": "System default", "opt.micN": "Microphone {n}", "opt.micMissing": "Previously selected microphone (not connected)", "set.micDevHint": "Switching while listening takes effect immediately.", "set.micDevNoLabel": "Device names appear here after you start listening and allow microphone access.", "flash.micFallback": "The selected microphone is unavailable; using the system default instead.", "u.x": "{v}×", "u.ms": "{v} ms", "u.s": "{v} s", "u.px": "{v} px", "u.pct": "{v}%",
     "spk.btn": "Speakers", "spk.title": "Speaker identification", "spk.beta": "Experimental", "spk.close": "Close",
    
-    "spk.listHint": "You can name the groups directly. If one person is split into several groups, give them the same name to merge them. Tap Listen to hear the most typical clip of a group.",
+   
    
    
    
     "spk.judging": "GPT is identifying speakers in {n} lines, {s}s so far (usually under a minute per episode)…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
    
     "spk.by.self_intro": "GPT: self-introduction", "spk.by.addressed": "GPT: answers when addressed", "spk.by.turn_taking": "GPT: turn-taking", "spk.by.content": "GPT: content and speaking habits", "spk.by.voice": "GPT: voice", "spk.by.unknown": "GPT",
-    "sec.spk": "Speakers", "spk.settings": "Display and grouping settings", "spk.on": "Identify speakers", "spk.onHint": "When on, each subtitle line is tagged with who said it: voices are first analyzed and grouped on this device (the first run downloads about 40 MB, no API usage), then GPT uses the subtitles and the current template's people and speaker cues to work out who each group is and fill in uncertain lines (uses the API, a few cents per episode). Runs automatically when a file finishes processing, or right away for files that are already done. Results appear in the subtitles, on the video and in exported files; turning this off hides them without deleting them.", "spk.introOff": "Speaker identification is off. Turn it on to tag each subtitle line with who said it.", "spk.introOn": "These are the speaker groups found. You can rename them; give groups the same name to merge them. After editing, tap Identify again and GPT will re-check using your names.", "spk.enable": "Turn on speaker identification", "spk.start": "Identify speakers", "spk.rerun": "Identify again", "spk.none": "Not identified yet. Tap Identify speakers.", "spk.wait": "Identification starts automatically when the file finishes processing.", "spk.needKey": "GPT identification needs an API key. Add one in Settings first.", "spk.done": "{k} groups; {a} of {b} lines tagged.", "file.spk": "Subtitles done · Speakers: {m}", "spk.confirm": "Before turning this on: the first run downloads about 40 MB of voice-analysis components (cached by the browser afterwards), so Wi-Fi is recommended. Each file also makes one GPT request, billed to your API key, about a few cents per episode.", "spk.confirmOk": "Turn on", "spk.confirmNo": "Not now", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
+    "sec.spk": "Speakers", "spk.settings": "Speaker settings", "spk.on": "Identify speakers", "spk.onHint": "When on, each subtitle line is tagged with who said it: voices are first analyzed and grouped on this device (the first run downloads about 40 MB, no API usage), then GPT uses the subtitles and the current template's people and speaker cues to work out who each group is and fill in uncertain lines (uses the API, a few cents per episode). Runs automatically when a file finishes processing, or right away for files that are already done. Results appear in the subtitles, on the video and in exported files; turning this off hides them without deleting them.", "spk.introOff": "Speaker identification is off. Turn it on to tag each subtitle line with who said it.", "spk.introOn": "These are the voice groups and the names identified. Rename a group if it is wrong, then tap Identify again and GPT will re-check using your names; give several groups the same name to merge them. Tap Listen to hear a typical clip of a group.", "spk.enable": "Turn on speaker identification", "spk.start": "Identify speakers", "spk.rerun": "Identify again", "spk.none": "Not identified yet. Tap Identify speakers.", "spk.wait": "Identification starts automatically when the file finishes processing.", "spk.needKey": "GPT identification needs an API key. Add one in Settings first.", "spk.done": "{k} groups; {a} of {b} lines tagged.", "file.spk": "Subtitles done · Speakers: {m}", "spk.confirm": "Before turning this on: the first run downloads about 40 MB of voice-analysis components (cached by the browser afterwards), so Wi-Fi is recommended. Each file also makes one GPT request, billed to your API key, about a few cents per episode.", "spk.confirmOk": "Turn on", "spk.confirmNo": "Not now", "spk.saveVoices": "Save these voices to the template", "spk.saveVoicesHint": "Save after checking the group names. Files processed later with the same template are matched against these voices to recognize people. Only voice features are stored (about 1 KB per person), no audio; voices with the same name are merged.", "spk.saved": "Saved to the template: {names}", "spk.lib": "Template voice library: {names}", "spk.libNone": "Template voice library: empty", "spk.libMatch": "sounds like {name} (library)", "spk.clearVoices": "Clear voice library", "spk.clearVoicesSure": "Tap again to clear", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
     "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Re-extracting the audio track…", "spk.embed": "Analyzing voices {i} / {n} clips",
    
     "spk.err": "Analysis failed: {m}", "spk.needMedia": "The original file is required. Select it again first.", "spk.busy": "The file is being processed. Analyze after it finishes or is paused.", "sec.audio": "Audio capture", "set.audioHint": "All settings take effect when you tap Done, except the last three system options, which require stopping and restarting. Microphone changes apply immediately.",
@@ -262,7 +262,8 @@ function allTemplates() {
 }
 function getTemplate(id) { return allTemplates().find((x) => x.id === id); }
 function putTemplate(tp) {
-  const clean = { id: tp.id, name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "", updatedAt: Date.now() };
+  const prev = getTemplate(tp.id), voices = tp.voices !== undefined ? tp.voices : prev && prev.voices; // 编辑模板时草稿里没有声纹库,沿用原来的
+  const clean = { ...(voices && Object.keys(voices).length ? { voices } : {}), id: tp.id, name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "", updatedAt: Date.now() };
   store.set("templates", JSON.stringify(userTemplates().filter((x) => x.id !== tp.id).concat(clean)));
   if (cfg.tpl && cfg.tpl.id === tp.id) refreshTemplate();
 }
@@ -1306,6 +1307,10 @@ function spkRecluster(inherit, keepLlm) {
   const tot = cents.map((_, k) => { let s2 = 0; for (let i = 0; i < n; i++) if (spk.lab[i] === k) s2 += dur(i); return s2; });
   const order = cents.map((_, k) => k).sort((a, b) => tot[b] - tot[a]);
   cents = order.map((k) => cents[k]); assign();
+  // 前后文平滑:短片段结合前后片段一起定组(MyGO 三集实测按时长准确率 +0~2 个百分点)
+  { const K = cents.length, sims = new Float32Array(n * K);
+    for (let i = 0; i < n; i++) { const v = vec(i); cents.forEach((c, k) => { sims[i * K + k] = spkDot(v, c); }); }
+    spk.lab = spkSmooth(segs, sims, K); for (let i = 0; i < n; i++) spk.sim[i] = sims[i * K + spk.lab[i]]; }
   const oldC = spk.cents ? Array.from({ length: spk.cents.length / SPK_DIM }, (_, k) => spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)) : [], oldN = spk.names || [];
   if (inherit !== false) { // 新旧两组互为最像、且余弦 ≥ 0.8 才沿用名字,避免名字沿着相近的组一路传下去
     const best = (v, arr) => { let b = -1, bs = 0.8; arr.forEach((o, k) => { const s2 = spkDot(v, o); if (s2 >= bs) { bs = s2; b = k; } }); return b; };
@@ -1351,13 +1356,47 @@ function spkVote() {
     const j = llm && llm.get(l.id);
     if (j && j.who) {
       const nm = llmName(j.who);
-      if (nm !== l.spk && (!sure || j.basis === "self_intro" || j.basis === "addressed")) { l.spk = nm; l.spkBy = j.basis; }
+      const unnamed = sure && /^G\d+$/.test(j.who) === false && spk.groups.some((_, k) => spkName(k) === l.spk && spkName(k) === t("spk.n", { n: k + 1 }));
+      if (nm !== l.spk && (!sure || unnamed || j.basis === "self_intro" || j.basis === "addressed")) { l.spk = nm; l.spkBy = j.basis; }
     }
     if (l.spk) { if (!(l.spk in color)) color[l.spk] = Object.keys(color).length; l.spc = color[l.spk]; tagged++; } else delete l.spc;
     paintSpk(l);
   }
   spk.tagged = tagged; spk.timed = timed;
   saveLines();
+}
+// 模板声纹库:{ 名字: { v: base64(192 维 float32), d: 累计秒数 } }。确认过组名后存进模板,之后同一模板的文件自动对照
+const f32b64 = (v) => btoa(String.fromCharCode(...new Uint8Array(Float32Array.from(v).buffer)));
+const b64f32 = (s) => new Float32Array(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer);
+function spkGroupVecs() { return spk.groups.map((_, k) => spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)); } // 各组质心
+function spkSaveVoices() {
+  const tp = getTemplate(cfg.tpl.id); if (!tp || !spk) return;
+  const lib = { ...(tp.voices || {}) }, acc = {}, G = spkGroupVecs();
+  for (let k = 0; k < spk.groups.length; k++) {
+    const nm = spkName(k); if (nm === t("spk.n", { n: k + 1 })) continue; // 没认出名字的组不存
+    const a = (acc[nm] ||= { v: new Float32Array(SPK_DIM), d: 0 }), d = spk.groups[k].dur;
+    for (let i = 0; i < SPK_DIM; i++) a.v[i] += G[k][i] * d; a.d += d;
+  }
+  for (const [nm, a] of Object.entries(acc)) { // 和库里同名的按时长加权合并
+    const old = lib[nm];
+    if (old) { const ov = b64f32(old.v); for (let i = 0; i < SPK_DIM; i++) a.v[i] += ov[i] * old.d; a.d += old.d; }
+    lib[nm] = { v: f32b64(spkNorm(a.v)), d: Math.round(a.d) };
+  }
+  putTemplate({ ...tp, voices: lib }); renderSpk(); spkMsg(t("spk.saved", { names: Object.keys(acc).join("、") || "—" }));
+}
+// 对照规则(MyGO 四集跨集实测):余弦 ≥ 0.88、比第二像的高 0.05 以上、且互为最像 —— 不同人的误认全部排除;
+// 同一声优的「本人声线」和「角色声线」可能互相匹配,所以只作为提示交给 GPT,由它按本集是角色回还是本人回定名字
+const SPK_LIB_MIN = 0.88, SPK_LIB_MARGIN = 0.05;
+function spkLibMatch() {
+  const lib = Object.entries((cfg.tpl && cfg.tpl.voices) || {}).map(([name, x]) => ({ name, v: b64f32(x.v) }));
+  if (!spk || !lib.length) return [];
+  const G = spkGroupVecs();
+  return G.map((c, k) => {
+    const sc = lib.map((x) => spkDot(c, x.v)).map((s2, i) => [s2, i]).sort((a, b) => b[0] - a[0]);
+    const [s1, i1] = sc[0], s2 = sc[1] ? sc[1][0] : -1;
+    const mutual = G.every((h, j) => j === k || spkDot(h, lib[i1].v) < s1);
+    return s1 >= SPK_LIB_MIN && s1 - s2 >= SPK_LIB_MARGIN && mutual ? { name: lib[i1].name, sim: s1 } : null;
+  });
 }
 // LLM 判定:声纹候选 + 字幕文本 + 模板(背景、说话人线索、出演者)→ 每组的名字、每句的说话人
 let spkJudging = false;
@@ -1370,9 +1409,10 @@ async function spkJudge() {
   const t0 = Date.now(), tick = () => spkMsg(t("spk.judging", { s: Math.round((Date.now() - t0) / 1000), n: lines.length })), timer = setInterval(tick, 1000); tick();
   try {
     const g = cfg.glossary, tl = lines.filter((l) => l.ms != null && (l.src || l.raw));
+    const jl = tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [], near: l.spkNear }));
     const r = await judgeSpeakers({
-      lines: tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [], near: l.spkNear })),
-      groups: spk.groups.map((gr, k) => ({ k, name: (spk.names[k] || "").trim(), dur: gr.dur })),
+      lines: jl,
+      groups: (() => { const lm = spkLibMatch(); return spk.groups.map((gr, k) => ({ k, name: (spk.names[k] || "").trim(), dur: gr.dur, lib: lm[k] || undefined })); })(),
       description: cfg.tpl.description || "", spkNotes: cfg.tpl.spkNotes || "", people: g.people,
       share: SPK_SHARE,
     }, async (system, user, schema) => {
@@ -1384,7 +1424,7 @@ async function spkJudge() {
       return JSON.parse(data.choices[0].message.content);
     });
     if (curSess !== ss) return;
-    const names = spk.groups.map(() => ""); for (const x of r.groups) if (x.name) names[x.k] = x.name;
+    const names = reconcileGroupNames(jl, r, SPK_SHARE, spk.groups.length); // 组名和逐句判定对齐,重名且没句子支持的清空
     spk.llm = { names, lines: [...r.lines].map(([id, v]) => [id, v.who, v.basis]), at: Date.now() };
     spkVote(); spkSave();
   } catch (e) { console.error(e); clearInterval(timer); spkJudging = false; spkMsg(t("spk.err", { m: e.message || String(e) })); renderSpk(false); return; }
@@ -1418,18 +1458,20 @@ function renderSpk(msg = true) {
   const on = spkOn(), busy = spkBusy || spkJudging || !!spkAutoP;
   $("#spkIntro").textContent = t(on ? "spk.introOn" : "spk.introOff");
   $("#spkRun").textContent = t(!on ? "spk.enable" : spk ? "spk.rerun" : "spk.start"); $("#spkRun").disabled = busy || (on && !(curSess && curSess.done));
-  $("#spkListHint").hidden = !spk || !on;
-  const list = $("#spkList"); list.replaceChildren();
+  const list = $("#spkList"); list.replaceChildren(); $("#spkVoices").hidden = true;
   if (!on) { if (!busy) spkMsg(""); return; }
   if (!spk) { if (!busy) spkMsg(t(!(curSess && curSess.done) ? "spk.wait" : mediaBlob ? "spk.none" : "spk.needMedia")); return; }
   if (!busy && msg) spkMsg(t("spk.done", { k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
+  const libM = spkLibMatch(), libN = Object.keys((cfg.tpl && cfg.tpl.voices) || {});
+  $("#spkVoices").hidden = false; $("#spkSaveVoices").disabled = busy || !spk.groups.some((_, k) => spkName(k) !== t("spk.n", { n: k + 1 }));
+  $("#spkLib").textContent = libN.length ? t("spk.lib", { names: libN.join("、") }) : t("spk.libNone"); $("#spkClearVoices").hidden = !libN.length;
   spk.groups.forEach((g, k) => {
-    const ai = spk.llm && spk.llm.names[k];
+    const ai = spk.llm && spk.llm.names[k], lm = libM[k];
     const inp = el("input", { type: "text", value: spk.names[k] || "", placeholder: ai ? ai + " · AI" : t("spk.n", { n: k + 1 }) });
     inp.onchange = () => { spk.names[k] = inp.value.trim(); spkVote(); spkSave(); renderSpk(); };
     inp.onkeydown = (e) => { if (e.key === "Enter") inp.blur(); };
     const play = el("button", { className: "btn i-play", textContent: t("spk.play"), onclick: () => { const i = g.sample; if (i < 0) return; seekTo(spk.segs[2 * i] * 1000); spkStopAt = spk.segs[2 * i + 1] * 1000 + 200; } });
-    list.append(el("div", { className: "spkItem" }, el("i", { className: "dot", style: "--c:" + SPK_COLORS[k % SPK_COLORS.length] }), inp, el("span", { className: "meta", textContent: t("spk.meta", { dur: fmtClock(g.dur * 1000), n: g.n }) }), play));
+    list.append(el("div", { className: "spkItem" }, el("i", { className: "dot", style: "--c:" + SPK_COLORS[k % SPK_COLORS.length] }), inp, el("span", { className: "meta", textContent: t("spk.meta", { dur: fmtClock(g.dur * 1000), n: g.n }) + (lm ? " · " + t("spk.libMatch", { name: lm.name }) : "") }), play));
   });
 }
 $("#spkOpen").onclick = async () => { spkPanel(true); renderSpk(); await spkLoad(); renderSpk(); };
@@ -1438,6 +1480,13 @@ $("#spkRun").onclick = () => {
   if (!spkOn()) return spkAskEnable();
   if (spk) { spk.llm = null; spkVote(); spkSave(); } // 重新识别:保留声纹分组和你起的名字,GPT 重新判定
   spkAuto(); renderSpk();
+};
+$("#spkSaveVoices").onclick = spkSaveVoices;
+$("#spkClearVoices").onclick = () => {
+  const b = $("#spkClearVoices");
+  if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = t("spk.clearVoicesSure"); setTimeout(() => { delete b.dataset.armed; b.textContent = t("spk.clearVoices"); }, 3000); return; }
+  delete b.dataset.armed; b.textContent = t("spk.clearVoices");
+  const tp = getTemplate(cfg.tpl.id); if (tp) { putTemplate({ ...tp, voices: {} }); renderSpk(); }
 };
 $("#spkSettings").onclick = () => { openSettings(); $("#secSpk").scrollIntoView({ block: "start" }); };
 // 第一次开启先确认(要下载约 40 MB 组件、GPT 判定消耗 API),确认过一次就不再问
@@ -1527,9 +1576,9 @@ function download(name, text, type = "text/plain") {
   document.body.append(a); a.click(); a.remove();
 }
 function exportTemplate(tp) {
-  const { id, name, source, target, description, style, asrPrompt, spkNotes, glossary } = tp;
+  const { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, voices } = tp;
   download((name || "template").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60) + ".json",
-    JSON.stringify({ format: "live-subs-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, spkNotes, glossary } }, null, 2), "application/json");
+    JSON.stringify({ format: "live-subs-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, ...(voices ? { voices } : {}) } }, null, 2), "application/json");
 }
 $("#importTpl").onclick = () => $("#importFile").click();
 $("#importFile").onchange = async (e) => {
@@ -1623,7 +1672,7 @@ How the app works: the phone mic streams audio to a realtime speech recognizer (
 - ASR gets "asrPrompt" plus the names in speakers and terms (as prompt and keywords), so it spells rare names and terms correctly.
 - The translator gets "description" (background), "style" (translation rules) and the glossary (speakers + terms: original spelling | reading | translation | notes).
 
-Your job: from what the user tells you (event, show, meeting, lecture, match, links, pasted text), research with web search when it helps (official pages, performers/attendees and their exact name spellings and readings, recurring segment names, titles of works, character names, venue, jargon, catchphrases, sponsors), ask brief follow-up questions only when really needed, and keep a complete template draft up to date.
+Your job: from what the user tells you (event, show, meeting, lecture, match, links, pasted text), research with web search when it helps (official pages, performers/attendees and their exact name spellings and readings, recurring segment names, titles of works, character names, venue, jargon, catchphrases, sponsors, and the speaker cues described under spkNotes), ask brief follow-up questions only when really needed, and keep a complete template draft up to date.
 
 The user may attach files (lecture slides, papers, handouts, syllabi, scripts, cast lists, images). Treat them as primary sources and read them thoroughly:
 - Lectures and classes: put the lecturer (and anyone likely to speak) in speakers; in terms, collect the technical terms, method/theory/model names, people and works cited, abbreviations and symbols as they would be spoken aloud, and course-specific names that will actually come up. Use the established translation in the target field; add the original in notes when a term is often kept untranslated. description should summarize the course or lecture topic and level; style should cover terminology consistency, formulas and how to handle code or slide references.
@@ -1636,7 +1685,11 @@ Rules:
 - terms: roughly 30-150 entries most likely to be misheard or mistranslated: show/event names, segment/corner names, titles of works, character names, places, jargon, catchphrases, nicknames. Precision over volume; add "unverified" in notes when a fact comes from a single weak source.
 - description: 3-8 sentences of background, written in the target language (who, what, when, where, format, running jokes).
 - style: concrete translation guidance written in the target language (tone, honorifics, how to render nicknames, what to leave untranslated).
-- spkNotes: cues that help tell the speakers apart in a recording, written in the target language, one short paragraph per speaker: how they introduce themselves, what they call themselves and others, who usually leads/hosts, typical role in the conversation, verbal habits. Also the usual line-up/format (e.g. which people appear together, rotating hosts). Only well-sourced facts; empty string if nothing useful is known.
+- spkNotes: everything that helps tell the speakers apart in a recording (used to label who says each line), written in the target language. Research this like the glossary (official sites, wikis, episode transcripts, fan summaries). Cover:
+  * per speaker: the exact self-introduction pattern in the source language (quote it), first-person pronoun, the nicknames others call them and what they call each other (who calls whom what), usual role (host/MC who reads the script and letters, guest, assistant), verbal habits;
+  * ambiguity: people who share a name, nickname or similar-sounding name (e.g. two people both called "Hina"), and how to tell them apart (surname used, who is addressing whom, role); say explicitly when a nickname alone cannot identify the person;
+  * format: usual line-up and rotation (which people appear together, how many per episode), and if the show has different modes (e.g. episodes hosted in character vs as the cast themselves) how to tell which mode an episode is in and which set of names applies; map voice actors to the characters they voice.
+  Only well-sourced facts (mark weak ones "unverified"); one short paragraph per speaker plus the format/ambiguity notes; empty string if nothing useful is known.
 - asrPrompt: one or two natural sentences in the SOURCE language describing the audio (e.g. "日本語のラジオ番組の公開イベントの音声。"). No lists; names are appended automatically.
 - name: short template name.
 - reply: a short message to the user written in ${uiLang === "zh" ? "Simplified Chinese" : "English"}: what you found or changed, key sources as plain URLs, and at most two questions. Plain text only, no Markdown. Do not repeat the whole glossary in reply.`;

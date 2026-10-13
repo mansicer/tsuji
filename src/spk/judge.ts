@@ -17,6 +17,8 @@ export interface JudgeGroup {
   /** 用户起的名字(优先级最高,LLM 不得改) */
   name: string;
   dur: number;
+  /** 和模板声纹库里某人的声音很像(之前确认过名字、存下的声纹) */
+  lib?: { name: string; sim: number };
 }
 export interface JudgeInput {
   lines: JudgeLine[];
@@ -41,7 +43,7 @@ type Chat = (system: string, user: string, schema: object) => Promise<any>;
 const SYSTEM = `You decide who speaks each subtitle line of a recording (radio show, talk, meeting).
 Inputs:
 - Background and speaker cues from the user's template, and the list of known people (the only names you may use).
-- Voice groups G1, G2, ... from a speaker-embedding model (clustering of voices). A group is usually one person but can mix people with similar voices; small groups may be noise. A group may already carry a name the user assigned: that name is fixed.
+- Voice groups G1, G2, ... from a speaker-embedding model (clustering of voices). A group is usually one person but can mix people with similar voices; small groups may be noise. A group may already carry a name the user assigned: that name is fixed. A group may also match a voiceprint saved from earlier recordings ("voice library match"): strong evidence of the same physical voice, but a voice actor's own voice can match the character they voice (and vice versa), so pick the actor or character name according to how people introduce themselves in this recording.
 - Each line: id, time, voice evidence ("G2 80% / G1 20%" = share of the line's speech assigned to each group; "G2 (nearest clip, 0.8 s away)" = the line's own timing had no voice clip, this is the closest one and is weaker evidence; "none" = no voice evidence) and the recognized text.
 
 Step 1, name the groups: for each group decide which known person it is, using self-introductions, being addressed by name and answering, hosting/reading the script, and the speaker cues. Give the line ids you relied on. Leave the name empty when unsure; never invent names; two groups may map to the same person.
@@ -66,7 +68,7 @@ const gname = (k: number) => "G" + (k + 1);
 
 export function judgePrompt(inp: JudgeInput, lines = inp.lines): string {
   const people = inp.people.map((p) => "- " + [p.src, p.reading && "reading: " + p.reading, p.tgt && "translation: " + p.tgt, p.notes && "notes: " + p.notes].filter(Boolean).join(" | ")).join("\n");
-  const groups = inp.groups.map((g) => `- ${gname(g.k)}: ${Math.round(g.dur)} s of speech` + (g.name ? `, named by user: ${g.name}` : "")).join("\n");
+  const groups = inp.groups.map((g) => `- ${gname(g.k)}: ${Math.round(g.dur)} s of speech` + (g.name ? `, named by user: ${g.name}` : "") + (g.lib ? `, voice library match: ${g.lib.name} (cosine ${g.lib.sim.toFixed(2)})` : "")).join("\n");
   const body = lines.map((l) => `#${l.id} [${clock(l.s)}-${clock(l.e)}] voice: ${!l.voice.length ? "none" : l.near != null ? `${gname(l.voice[0][0])} (nearest clip, ${l.near.toFixed(1)} s away)` : l.voice.map(([k, p]) => `${gname(k)} ${Math.round(p * 100)}%`).join(" / ")} | ${l.text}`).join("\n");
   return [
     inp.description && "Background:\n" + inp.description,
@@ -94,3 +96,29 @@ export async function judgeSpeakers(inp: JudgeInput, chat: Chat, win = 400): Pro
   return out;
 }
 export { SCHEMA as JUDGE_SCHEMA };
+
+/**
+ * 组名校对:GPT 给整组起的名字有时和它逐句的判定对不上(例如两组都叫同一个人,而句子却标成了别人)。
+ * 对每组看「声纹确定属于该组」的句子,GPT 逐句判定的多数人若是别人、且占 60% 以上(至少 3 句),就以逐句多数为准。
+ */
+export function reconcileGroupNames(lines: JudgeLine[], out: JudgeOutput, share: number, nGroups: number): string[] {
+  const names = Array.from({ length: nGroups }, (_, k) => out.groups.find((g) => g.k === k)?.name || "");
+  const toName = (w: string) => (/^G\d+$/.test(w) ? names[Number(w.slice(1)) - 1] || "" : w);
+  for (let k = 0; k < nGroups; k++) {
+    const c: Record<string, number> = {}; let n = 0;
+    for (const l of lines) {
+      if (l.near != null || !l.voice.length || l.voice[0][0] !== k || l.voice[0][1] < share - 1e-9) continue;
+      const w = toName(out.lines.get(l.id)?.who || ""); if (!w) continue;
+      c[w] = (c[w] || 0) + 1; n++;
+    }
+    const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] >= 3 && top[1] / n >= 0.6) names[k] = top[0];
+  }
+  // 重名:几组叫同一个人时,只有确有句子支持(该组声纹确定的句子里 GPT 也判成这个人,至少 3 句)的组保留名字,其余清空
+  const support = names.map((nm, k) => (nm ? lines.filter((l) => l.near == null && l.voice.length && l.voice[0][0] === k && l.voice[0][1] >= share - 1e-9 && toName(out.lines.get(l.id)?.who || "") === nm).length : 0));
+  for (let k = 0; k < nGroups; k++) {
+    if (!names[k] || names.filter((x) => x === names[k]).length < 2) continue;
+    if (support[k] < 3) names[k] = "";
+  }
+  return names;
+}
