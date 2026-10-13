@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14161c">
+<title>实时翻译</title>
+</head>
+<body>
+<header>
+  <span class="logo" aria-hidden="true"></span>
+  <h1 id="title">实时翻译</h1>
+  <span id="status" class="chip" data-i18n="status.idle">未开始</span>
+  <button class="iconbtn i-list" id="toHome" data-i18n="hdr.sessions">会话</button>
+  <button class="iconbtn" id="toTpl" data-i18n="hdr.home">模板</button>
+  <button class="iconbtn" id="openSettings" data-i18n="hdr.settings">设置</button>
+</header>
+
+<!-- 会话列表(首页):每次翻译是一个会话,有自己的模板、语言、设置和字幕记录 -->
+<div class="view listView" id="viewHome" hidden>
+  <div class="scroll"><div class="wrap">
+    <div class="hint i-info" data-i18n="home.sessIntro"></div>
+    <div class="hint i-alert" id="noKey" hidden data-i18n="home.noKey"></div>
+    <div class="btns">
+      <button class="btn primary i-plus" id="newSession" data-i18n="home.newSession"></button>
+    </div>
+    <div id="sessList" class="wrap"></div>
+  </div></div>
+</div>
+
+<!-- 模板列表 -->
+<div class="view listView" id="viewTpl" hidden>
+  <div class="scroll"><div class="wrap">
+    <div class="hint i-info" data-i18n="home.intro"></div>
+    <div class="btns">
+      <button class="btn primary i-plus" id="newTpl" data-i18n="home.new"></button>
+      <button class="btn i-upload" id="importTpl" data-i18n="home.import"></button>
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+      <input type="file" id="mediaFile" accept="audio/*,video/*,.mkv,.mov,.m4a,.flac,.ogg,.opus,.webm" hidden>
+    </div>
+    <div id="tplList" class="wrap"></div>
+  </div></div>
+</div>
+
+<!-- 实时翻译 -->
+<div class="view" id="viewLive" hidden>
+  <div id="playerBox" hidden>
+    <div class="pwrap"><video id="player" controls playsinline preload="metadata"></video><div id="ovl"><span class="ot"></span><br><span class="os"></span></div></div>
+  </div>
+  <main id="log" class="scroll" aria-live="polite"></main>
+  <footer>
+    <div id="partial"></div>
+    <div id="infobar">
+      <span class="sig" id="signal" data-level="0"><i></i><i></i><i></i><i></i><i></i></span>
+      <span id="ibItems"></span>
+    </div>
+    <div id="fileBar" hidden>
+      <div class="pbar"><i id="pfill"></i></div>
+      <div class="pinfo"><span id="pinfo"></span>
+        <span class="btns"><button class="btn i-upload" id="reattach" hidden data-i18n="file.reattach"></button><button class="btn i-users" id="spkOpen" data-i18n="spk.btn"></button><button class="btn i-download" id="expSrt">SRT</button><button class="btn i-download" id="expVtt">VTT</button></span></div>
+    </div>
+    <div class="controls">
+      <span class="ctlSide"></span>
+      <button id="go" data-i18n="live.start">开始收音</button>
+      <span class="ctlSide"><button class="iconbtn i-down" id="follow" data-i18n="live.follow">自动滚动</button></span>
+    </div>
+  </footer>
+</div>
+
+<!-- 说话人识别(文件会话) -->
+<aside id="spkPanel" hidden>
+  <h2><span data-i18n="spk.title"></span><span class="tag" data-i18n="spk.beta"></span><button class="btn i-x" id="spkClose" data-i18n="spk.close"></button></h2>
+  <div class="body">
+    <div class="hint" data-i18n="spk.intro"></div>
+    <div class="btns"><button class="btn primary i-spark" id="spkRun"></button></div>
+    <div class="pbar" id="spkBar" hidden><i></i></div>
+    <div class="hint" id="spkMsg"></div>
+    <div id="spkList"></div>
+    <div class="hint" id="spkListHint" data-i18n="spk.listHint"></div>
+    <label><span data-i18n="spk.dist"></span> <input type="range" id="spkDist" min="0.3" max="0.8" step="0.05"><small data-i18n="spk.distHint"></small></label>
+    <label><span data-i18n="spk.share"></span> <input type="range" id="spkShare" min="50" max="100" step="5"><small data-i18n="spk.shareHint"></small></label>
+    <label class="check"><input type="checkbox" id="spkShow"> <span data-i18n="spk.show"></span></label>
+    <label class="check"><input type="checkbox" id="spkSplit"> <span data-i18n="spk.split"></span></label>
+    <div class="hint" data-i18n="spk.splitHint"></div>
+    <div class="btns"><button class="btn i-trash" id="spkClear" data-i18n="spk.clear"></button></div>
+  </div>
+</aside>
+
+<!-- 创建 / 编辑模板 -->
+<div class="view" id="viewCreate" hidden>
+  <div class="tabs"><button id="tabChat" class="on" data-i18n="create.tabChat"></button><button id="tabDraft"></button></div>
+  <div class="panes" data-tab="chat" id="panes">
+    <div class="pane" id="chatPane">
+      <div class="scroll" id="chatLog"></div>
+      <div class="composerBox">
+      <div class="attachments" id="attachList"></div>
+      <div class="composer">
+        <button class="btn i-clip" id="chatAttach" data-i18n="create.attach"></button>
+        <input type="file" id="attachFile" multiple hidden accept=".pdf,.pptx,.ppt,.docx,.doc,.xlsx,.txt,.md,.csv,.srt,.vtt,.tex,.html,.json,image/*">
+        <textarea id="chatInput" rows="2" data-i18n-ph="create.placeholder"></textarea>
+        <button class="btn primary i-send" id="chatSend" data-i18n="create.send"></button>
+      </div>
+      </div>
+    </div>
+    <div class="pane" id="draftPane">
+      <div class="scroll"><div class="wrap">
+        <label><span data-i18n="draft.name"></span><input type="text" id="dName"></label>
+        <div class="two">
+          <label><span data-i18n="draft.source"></span><select id="dSource" class="srcLangs"></select></label>
+          <label><span data-i18n="draft.target"></span><select id="dTarget" class="tgtLangs"></select></label>
+        </div>
+        <label><span data-i18n="draft.desc"></span><textarea id="dDesc" rows="5"></textarea><small data-i18n="draft.descHint"></small></label>
+        <label><span data-i18n="draft.style"></span><textarea id="dStyle" rows="4"></textarea><small data-i18n="draft.styleHint"></small></label>
+        <label><span data-i18n="draft.asr"></span><textarea id="dAsr" rows="3"></textarea><small data-i18n="draft.asrHint"></small></label>
+        <div class="card">
+          <h4 id="gTitle"></h4>
+          <div class="hint" data-i18n="draft.glossHint"></div>
+          <div class="gbox" id="gTableBox"><table class="gtable"><thead><tr><th data-i18n="g.src"></th><th data-i18n="g.reading"></th><th data-i18n="g.tgt"></th><th data-i18n="g.notes"></th></tr></thead><tbody id="gBody"></tbody></table></div>
+          <textarea id="dGlossText" class="mono" spellcheck="false" hidden></textarea>
+          <div class="btns"><button class="btn i-list" id="gToggle"></button></div>
+        </div>
+      </div></div>
+      <div class="draftBar">
+        <button class="btn primary i-play" id="dSaveStart" data-i18n="draft.saveStart"></button>
+        <button class="btn i-check" id="dSave" data-i18n="draft.save"></button>
+        <button class="btn i-x" id="dDiscard" data-i18n="draft.discard"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="settings" hidden>
+  <h2><span data-i18n="set.title">设置</span> <button class="btn primary i-check" id="closeSettings" data-i18n="set.done">完成</button></h2>
+
+  <section>
+    <h3 class="i-globe" data-i18n="sec.general"></h3>
+    <label><span data-i18n="set.uiLang"></span>
+      <select id="uiLang"><option value="zh">中文</option><option value="en">English</option></select></label>
+    <label><span data-i18n="set.micDev"></span>
+      <select id="micDev"><option value="" data-i18n="opt.micDefault"></option></select><small id="micDevHint"></small></label>
+    <label><span data-i18n="set.ctModel"></span>
+      <select id="ctModel">
+        <option value="gpt-6.1-sol">gpt-6.1-sol</option>
+        <option value="gpt-6-luna">gpt-6-luna</option>
+      </select><small id="ctModelHint"></small></label>
+    <label><span data-i18n="set.apiKey"></span><input type="password" id="apiKey" autocomplete="off" placeholder="sk-..."><small data-i18n="set.keyHint"></small></label>
+  </section>
+
+  <section id="langSec" class="sess">
+    <h3 class="i-lang" data-i18n="sec.lang"></h3>
+    <div class="hint" id="curTplName"></div>
+    <div class="two">
+      <label><span data-i18n="draft.source"></span><select id="srcLang" class="srcLangs"></select></label>
+      <label><span data-i18n="draft.target"></span><select id="tgtLang" class="tgtLangs"></select></label>
+    </div>
+    <div class="hint" data-i18n="set.langHint"></div>
+    <div class="btns"><button class="btn i-edit" id="editCurTpl" data-i18n="set.editTpl"></button></div>
+  </section>
+
+  <section class="sess">
+    <h3 class="i-cpu" data-i18n="sec.models"></h3>
+    <label><span data-i18n="set.asrModel"></span>
+      <select id="asrModel">
+        <option value="gpt-transcribe">gpt-transcribe</option>
+        <option value="gpt-live-transcribe">gpt-live-transcribe</option>
+      </select><small id="asrModelHint"></small></label>
+    <label><span data-i18n="set.mtModel"></span>
+      <select id="mtModel">
+        <option value="gpt-6.1-sol">gpt-6.1-sol</option>
+        <option value="gpt-6-luna">gpt-6-luna</option>
+      </select><small id="mtModelHint"></small></label>
+    <label><span data-i18n="set.effort"></span>
+      <select id="mtEffort">
+        <option value="" data-i18n="opt.effortNone"></option>
+        <option value="minimal" data-i18n="opt.effortMinimal"></option>
+        <option value="low" data-i18n="opt.effortLow"></option>
+        <option value="medium" data-i18n="opt.effortMedium"></option>
+        <option value="high" data-i18n="opt.effortHigh"></option>
+      </select><small data-i18n="set.effortHint"></small></label>
+  </section>
+
+  <section class="secAudio sess">
+    <h3 class="i-mic" data-i18n="sec.audio"></h3>
+    <div class="hint" data-i18n="set.audioHint"></div>
+    <label><span data-i18n="set.gain"></span>
+      <select id="gain">
+        <option value="auto" data-i18n="opt.gainAuto"></option>
+        <option value="1" data-i18n="opt.gain1"></option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option value="32">32×</option>
+      </select><small data-i18n="set.gainHint"></small></label>
+    <label><span data-i18n="set.maxGain"></span> <input type="range" id="maxGain" min="1" max="50" step="1"><small id="maxGainV"></small></label>
+    <label><span data-i18n="set.agcTarget"></span> <input type="range" id="agcTarget" min="2" max="25" step="1"><small id="agcTargetV"></small></label>
+    <label><span data-i18n="set.vad"></span> <input type="range" id="vad" min="0.05" max="0.9" step="0.05"><small id="vadV"></small></label>
+    <label><span data-i18n="set.silence"></span> <input type="range" id="silence" min="200" max="2000" step="50"><small id="silenceV"></small></label>
+    <label><span data-i18n="set.maxTurn"></span> <input type="range" id="maxTurn" min="3" max="30" step="1"><small id="maxTurnV"></small></label>
+    <label><span data-i18n="set.prefix"></span> <input type="range" id="prefix" min="0" max="1000" step="50"><small id="prefixV"></small></label>
+    <label><span data-i18n="set.nr"></span>
+      <select id="nr"><option value="off" data-i18n="opt.off"></option><option value="far_field" data-i18n="opt.far"></option><option value="near_field" data-i18n="opt.near"></option></select><small data-i18n="set.nrHint"></small></label>
+    <label class="check"><input type="checkbox" id="micAgc"> <span data-i18n="set.micAgc"></span></label>
+    <label class="check"><input type="checkbox" id="micNs"> <span data-i18n="set.micNs"></span></label>
+    <label class="check"><input type="checkbox" id="micEc"> <span data-i18n="set.micEc"></span></label>
+    <div class="hint" data-i18n="set.micHint"></div>
+    <div class="btns"><button class="btn i-restore" id="resetAudio" data-i18n="set.resetAudio"></button></div>
+  </section>
+
+  <section class="sess">
+    <h3 class="i-eye" data-i18n="sec.display"></h3>
+    <label class="check"><input type="checkbox" id="showSrc" checked> <span data-i18n="set.showSrc"></span></label>
+    <label><span data-i18n="set.fontSize"></span> <input type="range" id="tgtSize" min="16" max="40" value="24"></label>
+  </section>
+
+  <section class="sess">
+    <h3 class="i-doc" data-i18n="sec.records"></h3>
+    <div class="btns">
+      <button class="btn i-copy" id="copyAll" data-i18n="rec.copy"></button>
+      <button class="btn i-download" id="saveAll" data-i18n="rec.save"></button>
+      <button class="btn i-trash" id="clearAll" data-i18n="rec.clear"></button>
+    </div>
+    <div id="costOut" class="hint"></div>
+    <div class="btns"><button class="btn i-restore" id="resetCost" data-i18n="rec.resetCost"></button></div>
+    <div class="btns"><button class="btn primary i-spark" id="recap" data-i18n="rec.recap"></button></div>
+    <div id="recapOut"></div>
+  </section>
+
+  <section>
+    <h3 class="i-wrench" data-i18n="sec.adv"></h3>
+    <label><span data-i18n="set.apiBase"></span> <input type="text" id="apiBase" placeholder="https://api.openai.com/v1"></label>
+    <div class="hint" id="buildVer"></div>
+  </section>
+</div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
