@@ -110,7 +110,7 @@ const I18N = {
     "spk.btn": "说话人", "spk.title": "说话人识别", "spk.beta": "实验功能", "spk.close": "关闭",
    
     "spk.listHint": "可以直接给组起名字。同一个人被分成几组时，把这些组改成相同的名字就会合并。点击“试听”可听该组最有代表性的一段。",
-    "spk.dist": "分组灵敏度", "spk.distLoose": "合并多一些", "spk.distStd": "标准(推荐)", "spk.distFine": "拆分细一些", "spk.distHint": "先用“标准”。分析后如果同一个人被分成了好几组，选“合并多一些”；如果两个人被分进了同一组(字幕里一个人的标签出现在另一个人说的话上)，选“拆分细一些”。改动立即生效，不用重新分析；之前的 GPT 判定会失效，需要重新判定。",
+   
    
    
     "spk.judging": "GPT 正在根据 {n} 句字幕判定说话人，已用 {s} 秒(一集通常需要几十秒)……", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
@@ -194,7 +194,7 @@ const I18N = {
     "spk.btn": "Speakers", "spk.title": "Speaker identification", "spk.beta": "Experimental", "spk.close": "Close",
    
     "spk.listHint": "You can name the groups directly. If one person is split into several groups, give them the same name to merge them. Tap Listen to hear the most typical clip of a group.",
-    "spk.dist": "Grouping sensitivity", "spk.distLoose": "Merge more", "spk.distStd": "Standard (recommended)", "spk.distFine": "Split more", "spk.distHint": "Start with Standard. After analysis, if one person is split into several groups, choose Merge more; if two people end up in one group (one person's tag appears on lines someone else said), choose Split more. Takes effect immediately without re-analyzing; earlier GPT results are discarded and need to be run again.",
+   
    
    
     "spk.judging": "GPT is identifying speakers in {n} lines, {s}s so far (usually under a minute per episode)…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
@@ -366,7 +366,7 @@ function migrateToSessions() {
 }
 
 function loadSettings() {
-  $("#spkDist").value = ["0.4", "0.5", "0.6"].includes(sget("spkDist", "0.5")) ? sget("spkDist", "0.5") : "0.5"; $("#secSpk").hidden = !isFileSess();
+  $("#secSpk").hidden = !isFileSess();
   $("#spkOn").checked = spkOn();
   document.body.classList.toggle("nospk", !spkOn());
   $("#uiLang").value = uiLang;
@@ -1222,6 +1222,9 @@ const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8
 let spk = null, spkBusy = false, spkStopAt = null, spkModelP = null;
 // 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
 const SPK_SHARE = 0.85;
+// 分组阈值(余弦距离)、投票时句子两端放宽的秒数、没有重叠片段时找最近片段的最大距离:
+// 都按 MyGO #199 官方字幕颜色标注(真实说话人)实测选定,0.5–0.9 的阈值结果几乎一样
+const SPK_DIST = 0.5, SPK_PAD = 0.5, SPK_NEAR = 2;
 function spkOn() { return sget("spkOn", "0") === "1"; }
 function spkPrefix(l) { return l.spk && spkOn() ? l.spk + (CJK.test(l.tgt || l.src || "") ? "：" : ": ") : ""; }
 function spkName(c) { return (spk.names[c] || "").trim() || (spk.llm && spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
@@ -1290,7 +1293,7 @@ function spkRecluster(inherit, keepLlm) {
   let long = []; for (let i = 0; i < n; i++) if (dur(i) >= 1.5) long.push(i);
   if (long.length > 600) long = long.sort((a, b) => dur(b) - dur(a)).slice(0, 600);
   if (long.length < 2) for (let i = 0; i < n; i++) if (!long.includes(i)) long.push(i);
-  const lab = spkCluster(long.map(vec), Number(sget("spkDist", "0.5"))), groups = new Map();
+  const lab = spkCluster(long.map(vec), SPK_DIST), groups = new Map();
   long.forEach((i, k) => { const g = groups.get(lab[k]) || []; g.push(i); groups.set(lab[k], g); });
   let keep = [...groups.values()].filter((g) => g.length >= Math.max(3, 0.03 * long.length));
   if (!keep.length) keep = [[...groups.values()].sort((a, b) => b.length - a.length)[0]];
@@ -1330,14 +1333,16 @@ function spkVote() {
   for (const l of lines) {
     if (l.ms == null) continue;
     timed++;
-    const s = l.ms / 1000, e = l.endMs / 1000, vote = {}, gv = {}; let sum = 0;
+    const s = l.ms / 1000 - SPK_PAD, e = l.endMs / 1000 + SPK_PAD, vote = {}, gv = {}; let sum = 0;
     for (let i = 0; i < n; i++) {
       const ov = Math.min(e, segs[2 * i + 1]) - Math.max(s, segs[2 * i]);
       if (ov <= 0) continue;
       const w = ov * (segs[2 * i + 1] - segs[2 * i] >= 1.5 ? 1 : 0.5), nm = spkName(spk.lab[i]);
       vote[nm] = (vote[nm] || 0) + w; gv[spk.lab[i]] = (gv[spk.lab[i]] || 0) + w; sum += w;
     }
-    l.spkV = Object.entries(gv).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, w]) => [Number(k), w / sum]);
+    l.spkV = Object.entries(gv).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, w]) => [Number(k), w / sum]); delete l.spkNear;
+    // 句子的时间戳有时偏短、落在两段声音之间:取前后 SPK_NEAR 秒内最近的片段作参考,但不算声纹确定,交给 GPT 判断
+    if (!sum) { let bi = -1, bg = Infinity; for (let i = 0; i < n; i++) { const g = Math.max(segs[2 * i] - e, s - segs[2 * i + 1]); if (g < bg) { bg = g; bi = i; } } if (bi >= 0 && bg <= SPK_NEAR) { l.spkV = [[spk.lab[bi], 1]]; l.spkNear = Math.max(0, bg); } }
     const top = Object.entries(vote).sort((a, b) => b[1] - a[1])[0], sure = top && top[1] / sum >= share - 1e-9;
     delete l.spkBy;
     if (!top) delete l.spk; else if (sure) l.spk = top[0]; else l.spk = "";
@@ -1364,7 +1369,7 @@ async function spkJudge() {
   try {
     const g = cfg.glossary, tl = lines.filter((l) => l.ms != null && (l.src || l.raw));
     const r = await judgeSpeakers({
-      lines: tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [] })),
+      lines: tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [], near: l.spkNear })),
       groups: spk.groups.map((gr, k) => ({ k, name: (spk.names[k] || "").trim(), dur: gr.dur })),
       description: cfg.tpl.description || "", spkNotes: cfg.tpl.spkNotes || "", people: g.people,
       share: SPK_SHARE,
@@ -1433,7 +1438,6 @@ $("#spkRun").onclick = () => {
   spkAuto(); renderSpk();
 };
 $("#spkSettings").onclick = () => { openSettings(); $("#secSpk").scrollIntoView({ block: "start" }); };
-$("#spkDist").onchange = async () => { sset("spkDist", $("#spkDist").value === "0.5" ? null : $("#spkDist").value); if (await spkLoad()) { spkRecluster(true); spkSave(); if (!$("#spkPanel").hidden) renderSpk(); spkAuto(); } };
 // 第一次开启先确认(要下载约 40 MB 组件、GPT 判定消耗 API),确认过一次就不再问
 function spkAskEnable() {
   if (store.get("spkConsent", "") === "1") return spkSetOn(true);

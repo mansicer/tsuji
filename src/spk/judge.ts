@@ -8,6 +8,8 @@ export interface JudgeLine {
   text: string;
   /** 声纹候选:[组号, 占比],按占比从高到低,最多两个;空 = 没有声纹结果 */
   voice: [number, number][];
+  /** 这句本身没有声音片段,voice 取自前后最近的片段,距离(秒) */
+  near?: number;
 }
 export interface JudgeGroup {
   /** 组号(0 起) */
@@ -40,7 +42,7 @@ const SYSTEM = `You decide who speaks each subtitle line of a recording (radio s
 Inputs:
 - Background and speaker cues from the user's template, and the list of known people (the only names you may use).
 - Voice groups G1, G2, ... from a speaker-embedding model (clustering of voices). A group is usually one person but can mix people with similar voices; small groups may be noise. A group may already carry a name the user assigned: that name is fixed.
-- Each line: id, time, voice evidence ("G2 80% / G1 20%" = share of the line's speech assigned to each group; "none" = no voice evidence) and the recognized text.
+- Each line: id, time, voice evidence ("G2 80% / G1 20%" = share of the line's speech assigned to each group; "G2 (nearest clip, 0.8 s away)" = the line's own timing had no voice clip, this is the closest one and is weaker evidence; "none" = no voice evidence) and the recognized text.
 
 Step 1, name the groups: for each group decide which known person it is, using self-introductions, being addressed by name and answering, hosting/reading the script, and the speaker cues. Give the line ids you relied on. Leave the name empty when unsure; never invent names; two groups may map to the same person.
 Step 2, label every line: "who" is a known person's name exactly as listed, or "G<n>" when the voice group is clear but its person is unknown, or "" when you cannot tell.
@@ -65,7 +67,7 @@ const gname = (k: number) => "G" + (k + 1);
 export function judgePrompt(inp: JudgeInput, lines = inp.lines): string {
   const people = inp.people.map((p) => "- " + [p.src, p.reading && "reading: " + p.reading, p.tgt && "translation: " + p.tgt, p.notes && "notes: " + p.notes].filter(Boolean).join(" | ")).join("\n");
   const groups = inp.groups.map((g) => `- ${gname(g.k)}: ${Math.round(g.dur)} s of speech` + (g.name ? `, named by user: ${g.name}` : "")).join("\n");
-  const body = lines.map((l) => `#${l.id} [${clock(l.s)}-${clock(l.e)}] voice: ${l.voice.length ? l.voice.map(([k, p]) => `${gname(k)} ${Math.round(p * 100)}%`).join(" / ") : "none"} | ${l.text}`).join("\n");
+  const body = lines.map((l) => `#${l.id} [${clock(l.s)}-${clock(l.e)}] voice: ${!l.voice.length ? "none" : l.near != null ? `${gname(l.voice[0][0])} (nearest clip, ${l.near.toFixed(1)} s away)` : l.voice.map(([k, p]) => `${gname(k)} ${Math.round(p * 100)}%`).join(" / ")} | ${l.text}`).join("\n");
   return [
     inp.description && "Background:\n" + inp.description,
     inp.spkNotes && "Speaker cues:\n" + inp.spkNotes,
