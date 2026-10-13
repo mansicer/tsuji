@@ -81,13 +81,8 @@
     <div id="spkJudgeBox" hidden>
       <div class="btns"><button class="btn i-spark" id="spkJudge"></button></div>
       <div class="hint" data-i18n="spk.judgeHint"></div>
-      <label class="check"><input type="checkbox" id="spkUseLlm"> <span data-i18n="spk.useLlm"></span></label>
     </div>
-    <label><span data-i18n="spk.dist"></span> <input type="range" id="spkDist" min="0.3" max="0.8" step="0.05"><small data-i18n="spk.distHint"></small></label>
-    <label><span data-i18n="spk.share"></span> <input type="range" id="spkShare" min="50" max="100" step="5"><small data-i18n="spk.shareHint"></small></label>
-    <label class="check"><input type="checkbox" id="spkShow"> <span data-i18n="spk.show"></span></label>
-    <label class="check"><input type="checkbox" id="spkSplit"> <span data-i18n="spk.split"></span></label>
-    <div class="hint" data-i18n="spk.splitHint"></div>
+    <div class="btns"><button class="btn i-wrench" id="spkSettings" data-i18n="spk.settings"></button></div>
     <div class="btns"><button class="btn i-trash" id="spkClear" data-i18n="spk.clear"></button></div>
   </div>
 </aside>
@@ -213,6 +208,17 @@
     <h3 class="i-eye" data-i18n="sec.display"></h3>
     <label class="check"><input type="checkbox" id="showSrc" checked> <span data-i18n="set.showSrc"></span></label>
     <label><span data-i18n="set.fontSize"></span> <input type="range" id="tgtSize" min="16" max="40" value="24"></label>
+  </section>
+
+  <section class="sess" id="secSpk">
+    <h3 class="i-users" data-i18n="sec.spk"></h3>
+    <label class="check"><input type="checkbox" id="spkShow"> <span data-i18n="spk.show"></span></label>
+    <label><span data-i18n="spk.dist"></span>
+      <select id="spkDist">
+        <option value="0.6" data-i18n="spk.distLoose"></option>
+        <option value="0.5" data-i18n="spk.distStd"></option>
+        <option value="0.4" data-i18n="spk.distFine"></option>
+      </select><small data-i18n="spk.distHint"></small></label>
   </section>
 
   <section class="sess">

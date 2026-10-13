@@ -22,9 +22,9 @@ function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#
 // 滑动条刻度:每项列出带数字的主刻度,默认值高亮;点刻度直接跳到该值
 const TICKS = {
   maxGain: [1, 10, 20, 30, 40, 50], agcTarget: [2, 8, 14, 20, 25], vad: [0.05, 0.2, 0.4, 0.6, 0.9],
-  silence: [200, 600, 1000, 1500, 2000], maxTurn: [3, 8, 15, 20, 25, 30], prefix: [0, 300, 500, 750, 1000], tgtSize: [16, 24, 32, 40], spkDist: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8], spkShare: [50, 60, 70, 85, 100],
+  silence: [200, 600, 1000, 1500, 2000], maxTurn: [3, 8, 15, 20, 25, 30], prefix: [0, 300, 500, 750, 1000], tgtSize: [16, 24, 32, 40],
 };
-const TICK_DEF = { tgtSize: 24, spkDist: 0.5, spkShare: 85 }; // 不在收音设置里的滑动条的默认值
+const TICK_DEF = { tgtSize: 24 }; // 不在收音设置里的滑动条的默认值
 function buildTicks() {
   for (const [id, marks] of Object.entries(TICKS)) {
     const r = $("#" + id), min = Number(r.min), max = Number(r.max), def = TICK_DEF[id] ?? AUDIO_DEFAULTS[id];
@@ -39,7 +39,7 @@ function buildTicks() {
   }
 }
 // 每个滑动条标签右侧显示当前值(带单位),和填充色一起刷新
-const RANGE_UNIT = { maxGain: "u.x", silence: "u.ms", prefix: "u.ms", maxTurn: "u.s", tgtSize: "u.px", spkShare: "u.pct" };
+const RANGE_UNIT = { maxGain: "u.x", silence: "u.ms", prefix: "u.ms", maxTurn: "u.s", tgtSize: "u.px" };
 function updateRangeFill() {
   document.querySelectorAll("input[type=range]").forEach((r) => {
     r.style.setProperty("--p", ((r.value - r.min) / (r.max - r.min)) * 100 + "%");
@@ -108,15 +108,15 @@ const I18N = {
     "set.effortHint": "默认为“中”。强度越高，翻译越慢。非推理模型请选择“不设置”。",
     "set.micDev": "麦克风", "opt.micDefault": "系统默认", "opt.micN": "麦克风 {n}", "opt.micMissing": "之前选择的麦克风（当前未连接）", "set.micDevHint": "收音中切换会立即改用新的麦克风。", "set.micDevNoLabel": "开始收音并允许使用麦克风后，这里会显示各设备的名称。", "flash.micFallback": "所选麦克风不可用，已改用系统默认麦克风。", "u.x": "{v}×", "u.ms": "{v} 毫秒", "u.s": "{v} 秒", "u.px": "{v} px", "u.pct": "{v}%",
     "spk.btn": "说话人", "spk.title": "说话人识别", "spk.beta": "实验功能", "spk.close": "关闭", "spk.run": "开始分析", "spk.rerun": "重新分析",
-    "spk.intro": "在本机分析音频中的声音特征，把相似的声音归为同一组，不消耗 API 额度。首次使用需下载约 32 MB 的组件。多人快速接话时，一句字幕里可能混有几个人的声音，这类句子会标为“不确定”。",
-    "spk.listHint": "同一个人可能被分成几组，把这些组改成相同的名字即可合并。点击“试听”可播放该组中最有代表性的一段。",
-    "spk.dist": "分组阈值", "spk.distHint": "数值越小分得越细，同一个人更容易被拆成几组；数值越大，越容易把不同的人归为一组。调整后立即重新分组，无需重新分析。",
-    "spk.share": "标注所需占比", "spk.shareHint": "一句字幕中，某位说话人的时长占比达到该值才标注名字，否则标为“不确定”。",
-    "spk.show": "在字幕列表、画面和导出文件中显示说话人", "spk.split": "按说话人断句", "spk.splitHint": "处理文件时，在较短的停顿处断句，且不合并短句，便于区分说话人。对下次处理生效。",
+    "spk.intro": "第一步：在本机分析声音，把相似的声音归为一组，不消耗 API 额度。首次使用需下载约 40 MB 的组件。分析完成后，字幕旁会显示各组的标签。",
+    "spk.listHint": "可以直接给组起名字。同一个人被分成几组时，把这些组改成相同的名字就会合并。点击“试听”可听该组最有代表性的一段。",
+    "spk.dist": "分组灵敏度", "spk.distLoose": "合并多一些", "spk.distStd": "标准(推荐)", "spk.distFine": "拆分细一些", "spk.distHint": "先用“标准”。分析后如果同一个人被分成了好几组，选“合并多一些”；如果两个人被分进了同一组(字幕里一个人的标签出现在另一个人说的话上)，选“拆分细一些”。改动立即生效，不用重新分析；之前的 GPT 判定会失效，需要重新判定。",
+   
+    "spk.show": "在字幕列表、画面和导出文件中显示说话人",
     "spk.clear": "清除分析结果", "spk.clearSure": "再次点击以清除", "spk.judge": "用 GPT 结合字幕判定", "spk.judgeAgain": "重新用 GPT 判定", "spk.judging": "GPT 正在结合字幕和模板判定说话人…", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
-    "spk.judgeHint": "把声纹分组结果、每句字幕和模板里的出演者与说话人线索交给 GPT:给各组认出名字,声纹不确定的句子按上下文补判。需要 API,一集约几美分。你手动起的名字优先。", "spk.useLlm": "使用 GPT 判定结果",
+    "spk.judgeHint": "第二步(可选)：让 GPT 结合字幕内容和当前模板(出演者、说话人线索)判断各组是谁，并补全声音不够确定的句子，例如自我介绍、被点名后的回答。需要 API，一集约几美分。由 GPT 判定的标签显示为虚线框，悬停可查看依据；你起的名字始终优先。",
     "spk.by.self_intro": "GPT 判定:自我介绍", "spk.by.addressed": "GPT 判定:被点名后回答", "spk.by.turn_taking": "GPT 判定:对话轮次", "spk.by.content": "GPT 判定:内容与说话习惯", "spk.by.voice": "GPT 判定:声纹", "spk.by.unknown": "GPT 判定",
-    "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
+    "sec.spk": "说话人", "spk.settings": "显示与分组设置", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
     "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
     "spk.done": "共 {n} 个语音片段，分为 {k} 组；已标注 {a} / {b} 句字幕。", "spk.none": "尚未分析。分析约需一两分钟，期间请保持页面打开。",
     "spk.err": "分析失败：{m}", "spk.needMedia": "需要原文件才能分析，请先重新选择原文件。", "spk.busy": "文件正在处理，请在完成或暂停后再分析。", "sec.audio": "收音", "set.audioHint": "除最后三项系统选项需停止后重新开始收音外，其余设置在点击“完成”后立即生效；麦克风切换立即生效。",
@@ -192,15 +192,15 @@ const I18N = {
     "set.effortHint": "Default is Medium. Higher effort makes translation slower. Choose Not set for non-reasoning models.",
     "set.micDev": "Microphone", "opt.micDefault": "System default", "opt.micN": "Microphone {n}", "opt.micMissing": "Previously selected microphone (not connected)", "set.micDevHint": "Switching while listening takes effect immediately.", "set.micDevNoLabel": "Device names appear here after you start listening and allow microphone access.", "flash.micFallback": "The selected microphone is unavailable; using the system default instead.", "u.x": "{v}×", "u.ms": "{v} ms", "u.s": "{v} s", "u.px": "{v} px", "u.pct": "{v}%",
     "spk.btn": "Speakers", "spk.title": "Speaker identification", "spk.beta": "Experimental", "spk.close": "Close", "spk.run": "Analyze", "spk.rerun": "Analyze again",
-    "spk.intro": "Analyzes voice characteristics on this device and groups similar voices together. No API usage. The first run downloads about 32 MB of components. When several people talk in quick succession, one subtitle line may contain more than one voice; such lines are marked “Uncertain”.",
-    "spk.listHint": "One person may be split into several groups. Give those groups the same name to merge them. Tap “Listen” to play the most representative clip of a group.",
-    "spk.dist": "Grouping threshold", "spk.distHint": "Lower values split voices more finely, so one person is more likely to be split into several groups; higher values are more likely to put different people in one group. Changes regroup immediately without re-analyzing.",
-    "spk.share": "Required share", "spk.shareHint": "A line is labeled only when one speaker accounts for at least this share of its duration; otherwise it is marked “Uncertain”.",
-    "spk.show": "Show speakers in the subtitle list, on the video, and in exported files", "spk.split": "Split lines by speaker", "spk.splitHint": "When processing a file, split at shorter pauses and do not merge short lines, which helps separate speakers. Applies the next time the file is processed.",
+    "spk.intro": "Step 1: analyzes the voices on this device and groups similar ones together. No API usage. The first run downloads about 40 MB of components. Afterwards each subtitle line shows its group's tag.",
+    "spk.listHint": "You can name the groups directly. If one person is split into several groups, give them the same name to merge them. Tap Listen to hear the most typical clip of a group.",
+    "spk.dist": "Grouping sensitivity", "spk.distLoose": "Merge more", "spk.distStd": "Standard (recommended)", "spk.distFine": "Split more", "spk.distHint": "Start with Standard. After analysis, if one person is split into several groups, choose Merge more; if two people end up in one group (one person's tag appears on lines someone else said), choose Split more. Takes effect immediately without re-analyzing; earlier GPT results are discarded and need to be run again.",
+   
+    "spk.show": "Show speakers in the subtitle list, on the video, and in exported files",
     "spk.clear": "Clear results", "spk.clearSure": "Tap again to clear", "spk.judge": "Refine with GPT", "spk.judgeAgain": "Refine with GPT again", "spk.judging": "GPT is identifying speakers from the subtitles and template…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
-    "spk.judgeHint": "Sends the voice groups, each subtitle line and the template's people and speaker cues to GPT: it names the groups and fills in lines where the voice match is uncertain. Uses the API, a few cents per episode. Names you set take priority.", "spk.useLlm": "Use GPT results",
+    "spk.judgeHint": "Step 2 (optional): GPT uses the subtitles and the current template (people and speaker cues) to work out who each group is and fills in lines where the voice match is uncertain, such as self-introductions or answers after being addressed. Uses the API, a few cents per episode. Tags decided by GPT have a dashed outline; hover to see why. Names you set always take priority.",
     "spk.by.self_intro": "GPT: self-introduction", "spk.by.addressed": "GPT: answers when addressed", "spk.by.turn_taking": "GPT: turn-taking", "spk.by.content": "GPT: content and speaking habits", "spk.by.voice": "GPT: voice", "spk.by.unknown": "GPT",
-    "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
+    "sec.spk": "Speakers", "spk.settings": "Display and grouping settings", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
     "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Extracting audio…", "spk.embed": "Analyzing voices {i} / {n} clips",
     "spk.done": "{n} speech clips in {k} groups; {a} of {b} lines labeled.", "spk.none": "Not analyzed yet. Analysis takes a minute or two; keep this page open.",
     "spk.err": "Analysis failed: {m}", "spk.needMedia": "The original file is required. Select it again first.", "spk.busy": "The file is being processed. Analyze after it finishes or is paused.", "sec.audio": "Audio capture", "set.audioHint": "All settings take effect when you tap Done, except the last three system options, which require stopping and restarting. Microphone changes apply immediately.",
@@ -366,8 +366,8 @@ function migrateToSessions() {
 }
 
 function loadSettings() {
-  $("#spkDist").value = sget("spkDist", "0.5"); $("#spkShare").value = sget("spkShare", "85");
-  $("#spkShow").checked = sget("spkShow", "1") === "1"; $("#spkUseLlm").checked = spkUseLlm(); $("#spkSplit").checked = spkSplit();
+  $("#spkDist").value = ["0.4", "0.5", "0.6"].includes(sget("spkDist", "0.5")) ? sget("spkDist", "0.5") : "0.5"; $("#secSpk").hidden = !isFileSess();
+  $("#spkShow").checked = sget("spkShow", "1") === "1";
   document.body.classList.toggle("nospk", !$("#spkShow").checked);
   $("#uiLang").value = uiLang;
   $("#apiKey").value = store.get("apiKey", "");
@@ -518,7 +518,7 @@ function isShort(s) {
   return CJK.test(x) ? x.length <= 4 : s.trim().split(/\s+/).filter(Boolean).length <= 2;
 }
 function tryMerge(line) {
-  if (isFileSess() && spkSplit()) return false; // 按说话人断句时不合并,免得把不同人的话拼成一行
+  if (isFileSess()) return false; // 文件会话按说话人断句:不合并,免得把不同人的话拼成一行
   const i = lines.indexOf(line), prev = lines[i - 1];
   if (i < 1 || !prev.done || !prev.tgt || !prev.el.isConnected || prev.tgt.length > 60) return false;
   if (line.t - (prev.tEnd || prev.t) > MERGE_GAP_MS || !isShort(line.src)) return false;
@@ -1049,7 +1049,7 @@ async function extractPcm(blob) {
 }
 // 按说话人断句时停顿 0.3 秒就断句(快速接话时换人处更容易断开),识别费用不变
 function fileConfig() {
-  const keep = [cfg.asrModel, cfg.silence]; cfg.asrModel = "gpt-transcribe"; if (spkSplit()) cfg.silence = Math.min(cfg.silence, 300);
+  const keep = [cfg.asrModel, cfg.silence]; cfg.asrModel = "gpt-transcribe"; cfg.silence = Math.min(cfg.silence, 300); // 短停顿就断句,便于区分说话人
   const c = sessionConfig(); [cfg.asrModel, cfg.silence] = keep; return c;
 }
 async function fileStart() {
@@ -1208,10 +1208,10 @@ $("#expVtt").onclick = () => download(fileName(curSess.name) + ".vtt", subtitleF
 // 声纹存在 IndexedDB「spk:<会话 id>」,改阈值、改名字只重新分组/投票,不用重算
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e64980", "#5c7cfa"];
 let spk = null, spkBusy = false, spkStopAt = null, spkModelP = null;
-function spkSplit() { return sget("spkSplit", "1") === "1"; }
+// 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
+const SPK_SHARE = 0.85;
 function spkPrefix(l) { return l.spk && $("#spkShow").checked ? l.spk + (CJK.test(l.tgt || l.src || "") ? "：" : ": ") : ""; }
-function spkName(c) { return (spk.names[c] || "").trim() || (spkUseLlm() && spk.llm && spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
-function spkUseLlm() { return sget("spkLlm", "1") === "1"; }
+function spkName(c) { return (spk.names[c] || "").trim() || (spk.llm && spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
 function paintSpk(l) {
   const tm = l.el.querySelector(".tm"); if (!tm) return;
   let w = tm.querySelector(".who");
@@ -1313,9 +1313,9 @@ function spkRecluster(inherit, keepLlm) {
 // 声纹确定的句子只在 LLM 有明确证据(自我介绍、被点名后回答)时改判
 function spkVote() {
   if (!spk) return;
-  const share = Number(sget("spkShare", "85")) / 100, { n, segs } = spk, color = {};
+  const share = SPK_SHARE, { n, segs } = spk, color = {};
   spk.groups.forEach((_, k) => { const nm = spkName(k); if (!(nm in color)) color[nm] = k; });
-  const llm = spkUseLlm() && spk.llm ? new Map(spk.llm.lines.map(([id, who, basis]) => [id, { who, basis }])) : null;
+  const llm = spk.llm ? new Map(spk.llm.lines.map(([id, who, basis]) => [id, { who, basis }])) : null;
   const llmName = (who) => (/^G\d+$/.test(who) ? spkName(Number(who.slice(1)) - 1) : who);
   let tagged = 0, timed = 0;
   for (const l of lines) {
@@ -1356,7 +1356,7 @@ async function spkJudge() {
       lines: tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [] })),
       groups: spk.groups.map((gr, k) => ({ k, name: (spk.names[k] || "").trim(), dur: gr.dur })),
       description: cfg.tpl.description || "", spkNotes: cfg.tpl.spkNotes || "", people: g.people,
-      share: Number(sget("spkShare", "85")) / 100,
+      share: SPK_SHARE,
     }, async (system, user, schema) => {
       const res = await fetch(cfg.apiBase + "/chat/completions", { method: "POST", headers: apiHeaders(), body: JSON.stringify({
         model: cfg.ctModel, reasoning_effort: "medium", messages: [{ role: "system", content: system }, { role: "user", content: user }],
@@ -1384,9 +1384,9 @@ function renderSpk(msg = true) {
   $("#spkClear").hidden = !spk; $("#spkListHint").hidden = !spk;
   const list = $("#spkList"); list.replaceChildren();
   if (!spk) { if (!spkBusy) spkMsg(t(mediaBlob ? "spk.none" : "spk.needMedia")); return; }
-  if (!spkBusy && !spkJudging && msg) spkMsg(t("spk.done", { n: spk.n, k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm && spkUseLlm() ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
+  if (!spkBusy && !spkJudging && msg) spkMsg(t("spk.done", { n: spk.n, k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
   spk.groups.forEach((g, k) => {
-    const ai = spkUseLlm() && spk.llm && spk.llm.names[k];
+    const ai = spk.llm && spk.llm.names[k];
     const inp = el("input", { type: "text", value: spk.names[k] || "", placeholder: ai ? ai + " · AI" : t("spk.n", { n: k + 1 }) });
     inp.onchange = () => { spk.names[k] = inp.value.trim(); spkVote(); spkSave(); renderSpk(); };
     inp.onkeydown = (e) => { if (e.key === "Enter") inp.blur(); };
@@ -1398,12 +1398,9 @@ $("#spkOpen").onclick = async () => { spkPanel(true); renderSpk(); await spkLoad
 $("#spkClose").onclick = () => spkPanel(false);
 $("#spkRun").onclick = spkAnalyze;
 $("#spkJudge").onclick = spkJudge;
-$("#spkUseLlm").onchange = () => { sset("spkLlm", $("#spkUseLlm").checked ? null : "0"); if (spk) { spkVote(); renderSpk(); } };
-$("#spkDist").oninput = () => { sset("spkDist", $("#spkDist").value === "0.5" ? null : $("#spkDist").value); updateRangeFill(); clearTimeout(spkDistT); spkDistT = setTimeout(() => { if (spk) { spkRecluster(true); spkSave(); renderSpk(); } }, 250); };
-let spkDistT = null;
-$("#spkShare").oninput = () => { sset("spkShare", $("#spkShare").value === "85" ? null : $("#spkShare").value); updateRangeFill(); if (spk) { spkVote(); renderSpk(); } };
+$("#spkSettings").onclick = () => { openSettings(); $("#secSpk").scrollIntoView({ block: "start" }); };
+$("#spkDist").onchange = async () => { sset("spkDist", $("#spkDist").value === "0.5" ? null : $("#spkDist").value); if (await spkLoad()) { spkRecluster(true); spkSave(); if (!$("#spkPanel").hidden) renderSpk(); } };
 $("#spkShow").onchange = () => { sset("spkShow", $("#spkShow").checked ? null : "0"); document.body.classList.toggle("nospk", !$("#spkShow").checked); };
-$("#spkSplit").onchange = () => sset("spkSplit", $("#spkSplit").checked ? null : "0");
 $("#spkClear").onclick = () => {
   const b = $("#spkClear");
   if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = t("spk.clearSure"); setTimeout(() => { delete b.dataset.armed; b.textContent = t("spk.clear"); }, 3000); return; }
