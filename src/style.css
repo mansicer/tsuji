@@ -330,8 +330,9 @@ section.sess h3::after { content: attr(data-chip); margin-left: auto; font-size:
 /* 文件翻译:播放器 + 叠加字幕 + 进度条 */
 .i-film { --ic: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='4' width='20' height='16' rx='2'/%3E%3Cpath d='M7 4v16M17 4v16M2 9h5M2 15h5M17 9h5M17 15h5'/%3E%3C/svg%3E"); }
 #playerBox { padding: 12px var(--gutter) 0; flex: none; }
-.pwrap { position: relative; max-width: var(--maxw); margin: 0 auto; background: #000; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
-#player { display: block; width: 100%; max-height: 42vh; background: #000; }
+.pwrap { position: relative; width: fit-content; max-width: min(100%, var(--maxw)); margin: 0 auto; background: #000; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+#playerBox.audio .pwrap { width: auto; }
+#player { display: block; width: auto; max-width: 100%; height: auto; max-height: 34vh; margin: 0 auto; background: #000; }
 #playerBox.audio .pwrap { background: var(--panel); }
 #playerBox.audio #player { height: 54px; max-height: none; background: transparent; }
 #playerBox.audio #ovl { display: none; }
@@ -383,3 +384,17 @@ body.nospk .row .who { display: none; }
   body.spkopen #viewLive { padding-right: 380px; }
   body.spkopen header { padding-right: 396px; }
 }
+
+/* 文件会话:字幕列表顶部渐隐,滚动时不会像被播放器切掉一半 */
+body.filemode #log { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 20px); mask-image: linear-gradient(to bottom, transparent 0, #000 20px); padding-top: 16px; }
+/* 宽屏看视频:左边播放器、右边字幕,底栏横跨两栏 */
+@media (min-width: 1100px) {
+  body.filemode #viewLive:has(#playerBox:not(.audio):not([hidden])) { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(360px, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  body.filemode #viewLive:has(#playerBox:not(.audio):not([hidden])) #playerBox { grid-column: 1; grid-row: 1; padding: 20px 12px 20px 24px; display: flex; align-items: flex-start; justify-content: center; min-height: 0; }
+  body.filemode #viewLive:has(#playerBox:not(.audio):not([hidden])) .pwrap { max-width: 100%; }
+  body.filemode #viewLive:has(#playerBox:not(.audio):not([hidden])) #player { max-height: calc(100dvh - 300px); }
+  body.filemode #viewLive:has(#playerBox:not(.audio):not([hidden])) #log { grid-column: 2; grid-row: 1; padding-left: 12px; padding-right: 24px; }
+  body.filemode #viewLive:has(#playerBox:not(.audio):not([hidden])) footer { grid-column: 1 / -1; grid-row: 2; padding-left: 24px; padding-right: 24px; }
+}
+/* 手机上视频小:叠加字幕只留译文(原文在下面列表里),免得盖住画面 */
+@media (max-width: 600px) { #ovl .os, #ovl br { display: none; } #ovl { bottom: 48px; } }
