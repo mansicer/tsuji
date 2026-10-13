@@ -72,18 +72,12 @@
 <aside id="spkPanel" hidden>
   <h2><span data-i18n="spk.title"></span><span class="tag" data-i18n="spk.beta"></span><button class="btn i-x" id="spkClose" data-i18n="spk.close"></button></h2>
   <div class="body">
-    <div class="hint" data-i18n="spk.intro"></div>
-    <div class="btns"><button class="btn primary i-spark" id="spkRun"></button></div>
+    <div class="hint" id="spkIntro"></div>
     <div class="pbar" id="spkBar" hidden><i></i></div>
     <div class="hint" id="spkMsg"></div>
     <div id="spkList"></div>
     <div class="hint" id="spkListHint" data-i18n="spk.listHint"></div>
-    <div id="spkJudgeBox" hidden>
-      <div class="btns"><button class="btn i-spark" id="spkJudge"></button></div>
-      <div class="hint" data-i18n="spk.judgeHint"></div>
-    </div>
-    <div class="btns"><button class="btn i-wrench" id="spkSettings" data-i18n="spk.settings"></button></div>
-    <div class="btns"><button class="btn i-trash" id="spkClear" data-i18n="spk.clear"></button></div>
+    <div class="btns"><button class="btn primary i-spark" id="spkRun"></button><button class="btn i-wrench" id="spkSettings" data-i18n="spk.settings"></button></div>
   </div>
 </aside>
 
@@ -212,7 +206,12 @@
 
   <section class="sess" id="secSpk">
     <h3 class="i-users" data-i18n="sec.spk"></h3>
-    <label class="check"><input type="checkbox" id="spkShow"> <span data-i18n="spk.show"></span></label>
+    <label class="check"><input type="checkbox" id="spkOn"> <span data-i18n="spk.on"></span></label>
+    <div class="card" id="spkConfirm" hidden>
+      <div class="hint" data-i18n="spk.confirm"></div>
+      <div class="btns"><button class="btn primary" id="spkConfirmOk" data-i18n="spk.confirmOk"></button><button class="btn" id="spkConfirmNo" data-i18n="spk.confirmNo"></button></div>
+    </div>
+    <div class="hint" data-i18n="spk.onHint"></div>
     <label><span data-i18n="spk.dist"></span>
       <select id="spkDist">
         <option value="0.6" data-i18n="spk.distLoose"></option>

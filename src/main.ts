@@ -53,7 +53,7 @@ const I18N = {
   zh: {
     "app": "实时翻译", "hdr.home": "模板", "hdr.sessions": "会话", "hdr.settings": "设置", "tpl.title": "模板", "card.file": "翻译文件", "sess.file": "文件", "sess.live": "实时",
     "file.start": "开始处理", "file.pause": "暂停", "file.resume": "继续处理", "file.redo": "重新处理", "file.redoSure": "再次点击以清空字幕并重新处理", "file.reattach": "重新选择原文件",
-    "file.idle": "时长 {total}。点击“开始处理”，以 {speed} 倍速识别并翻译。", "file.loading": "正在加载解码组件，首次使用需下载约 32 MB……", "file.extract": "正在提取音轨 {pct}%",
+    "file.idle": "时长 {total}。点击“开始处理”，以 {speed} 倍速识别并翻译。", "file.loading": "正在下载解码组件 {pct}%(约 32 MB，仅首次需要)", "file.extract": "正在提取音轨 {pct}%",
     "file.run": "识别 {pct}% · {pos} / {total} · {speed} 倍速 · 预计剩余 {eta} · 已翻译 {done}/{n} 句", "file.flush": "正在完成最后的识别和翻译 · 已翻译 {done}/{n} 句",
     "file.paused": "已暂停 · 已处理 {pos} / {total} · {n} 句字幕", "file.done": "已完成 · 时长 {total} · {n} 句字幕", "file.missing": "本地没有保存原文件，请重新选择同一个文件后再播放或处理。",
     "file.err": "处理中断：{m}。点击“继续处理”可从中断处接着处理。", "file.noStore": "文件较大，未能保存到浏览器本地；刷新页面后需要重新选择文件。", "file.asrNote": "文件翻译固定使用 gpt-transcribe，以获得精确的时间戳。",
@@ -107,18 +107,18 @@ const I18N = {
     "opt.effortNone": "不设置", "opt.effortMinimal": "最低", "opt.effortLow": "低", "opt.effortMedium": "中", "opt.effortHigh": "高",
     "set.effortHint": "默认为“中”。强度越高，翻译越慢。非推理模型请选择“不设置”。",
     "set.micDev": "麦克风", "opt.micDefault": "系统默认", "opt.micN": "麦克风 {n}", "opt.micMissing": "之前选择的麦克风（当前未连接）", "set.micDevHint": "收音中切换会立即改用新的麦克风。", "set.micDevNoLabel": "开始收音并允许使用麦克风后，这里会显示各设备的名称。", "flash.micFallback": "所选麦克风不可用，已改用系统默认麦克风。", "u.x": "{v}×", "u.ms": "{v} 毫秒", "u.s": "{v} 秒", "u.px": "{v} px", "u.pct": "{v}%",
-    "spk.btn": "说话人", "spk.title": "说话人识别", "spk.beta": "实验功能", "spk.close": "关闭", "spk.run": "开始分析", "spk.rerun": "重新分析",
-    "spk.intro": "第一步：在本机分析声音，把相似的声音归为一组，不消耗 API 额度。首次使用需下载约 40 MB 的组件。分析完成后，字幕旁会显示各组的标签。",
+    "spk.btn": "说话人", "spk.title": "说话人识别", "spk.beta": "实验功能", "spk.close": "关闭",
+   
     "spk.listHint": "可以直接给组起名字。同一个人被分成几组时，把这些组改成相同的名字就会合并。点击“试听”可听该组最有代表性的一段。",
     "spk.dist": "分组灵敏度", "spk.distLoose": "合并多一些", "spk.distStd": "标准(推荐)", "spk.distFine": "拆分细一些", "spk.distHint": "先用“标准”。分析后如果同一个人被分成了好几组，选“合并多一些”；如果两个人被分进了同一组(字幕里一个人的标签出现在另一个人说的话上)，选“拆分细一些”。改动立即生效，不用重新分析；之前的 GPT 判定会失效，需要重新判定。",
    
-    "spk.show": "在字幕列表、画面和导出文件中显示说话人",
-    "spk.clear": "清除分析结果", "spk.clearSure": "再次点击以清除", "spk.judge": "用 GPT 结合字幕判定", "spk.judgeAgain": "重新用 GPT 判定", "spk.judging": "GPT 正在结合字幕和模板判定说话人…", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
-    "spk.judgeHint": "第二步(可选)：让 GPT 结合字幕内容和当前模板(出演者、说话人线索)判断各组是谁，并补全声音不够确定的句子，例如自我介绍、被点名后的回答。需要 API，一集约几美分。由 GPT 判定的标签显示为虚线框，悬停可查看依据；你起的名字始终优先。",
+   
+    "spk.judging": "GPT 正在根据 {n} 句字幕判定说话人，已用 {s} 秒(一集通常需要几十秒)……", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
+   
     "spk.by.self_intro": "GPT 判定:自我介绍", "spk.by.addressed": "GPT 判定:被点名后回答", "spk.by.turn_taking": "GPT 判定:对话轮次", "spk.by.content": "GPT 判定:内容与说话习惯", "spk.by.voice": "GPT 判定:声纹", "spk.by.unknown": "GPT 判定",
-    "sec.spk": "说话人", "spk.settings": "显示与分组设置", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
-    "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
-    "spk.done": "共 {n} 个语音片段，分为 {k} 组；已标注 {a} / {b} 句字幕。", "spk.none": "尚未分析。分析约需一两分钟，期间请保持页面打开。",
+    "sec.spk": "说话人", "spk.settings": "显示与分组设置", "spk.on": "识别说话人", "spk.onHint": "开启后自动标出每句字幕是谁说的：先在本机分析声音并分组(首次需下载约 40 MB 组件，不消耗 API)，再由 GPT 结合字幕内容和当前模板的出演者、说话人线索确定每组是谁、补全声音不够确定的句子(消耗 API，一集约几美分)。文件处理完成后自动进行，已处理完的文件开启后立即开始。结果显示在字幕、画面和导出文件中，关闭后隐藏但不删除。", "spk.introOff": "说话人识别未开启。开启后会自动标出每句字幕是谁说的。", "spk.introOn": "下面是识别出的各组说话人。可以直接改名字：同一个人被分成几组时，改成相同的名字即可合并；改完点“重新识别”，GPT 会以你的名字为准重新判定。", "spk.enable": "开启说话人识别", "spk.start": "开始识别", "spk.rerun": "重新识别", "spk.none": "尚未识别。点击“开始识别”。", "spk.wait": "文件处理完成后会自动识别。", "spk.needKey": "GPT 判定需要 API 密钥，请先在设置中填写。", "spk.done": "已分为 {k} 组，标注 {a} / {b} 句字幕。", "file.spk": "已完成字幕 · 说话人识别：{m}", "spk.confirm": "开启前请确认：首次使用需要下载约 40 MB 的声音分析组件(之后由浏览器缓存)，建议在 Wi-Fi 下进行；每个文件识别时还会调用一次 GPT，按 API 计费，一集约几美分。", "spk.confirmOk": "确认开启", "spk.confirmNo": "暂不开启", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
+    "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在重新提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
+   
     "spk.err": "分析失败：{m}", "spk.needMedia": "需要原文件才能分析，请先重新选择原文件。", "spk.busy": "文件正在处理，请在完成或暂停后再分析。", "sec.audio": "收音", "set.audioHint": "除最后三项系统选项需停止后重新开始收音外，其余设置在点击“完成”后立即生效；麦克风切换立即生效。",
     "set.gain": "麦克风增益", "opt.gainAuto": "自动", "opt.gain1": "不放大", "set.gainHint": "默认为自动，底部信息栏会显示当前放大倍数。距离声源较远且没有字幕输出时，请先确认信息栏左侧的信号格是否有变化。",
     "set.maxGain": "自动增益上限", "set.agcTarget": "自动增益目标响度", "set.vad": "识别灵敏度", "set.silence": "断句静音时长", "set.maxTurn": "单句最长时长", "set.prefix": "句首保留时长",
@@ -137,7 +137,7 @@ const I18N = {
   en: {
     "app": "Live Translate", "hdr.home": "Templates", "hdr.sessions": "Sessions", "hdr.settings": "Settings", "tpl.title": "Templates", "card.file": "Translate file", "sess.file": "File", "sess.live": "Live",
     "file.start": "Start processing", "file.pause": "Pause", "file.resume": "Resume", "file.redo": "Process again", "file.redoSure": "Tap again to clear and reprocess", "file.reattach": "Select the original file",
-    "file.idle": "Duration {total}. Tap “Start processing” to transcribe and translate at {speed}× speed.", "file.loading": "Loading the decoder (about 32 MB on first use)…", "file.extract": "Extracting audio {pct}%",
+    "file.idle": "Duration {total}. Tap “Start processing” to transcribe and translate at {speed}× speed.", "file.loading": "Downloading the decoder {pct}% (about 32 MB, first time only)", "file.extract": "Extracting audio {pct}%",
     "file.run": "Recognition {pct}% · {pos} / {total} · {speed}× · about {eta} left · translated {done}/{n}", "file.flush": "Finishing recognition and translation · translated {done}/{n}",
     "file.paused": "Paused · processed {pos} / {total} · {n} lines", "file.done": "Done · duration {total} · {n} lines", "file.missing": "The original file is not stored on this device. Select the same file again to play or process it.",
     "file.err": "Processing stopped: {m}. Tap “Resume” to continue from where it stopped.", "file.noStore": "The file is too large to store in this browser; you will need to select it again after reloading.", "file.asrNote": "File translation always uses gpt-transcribe for accurate timestamps.",
@@ -191,18 +191,18 @@ const I18N = {
     "opt.effortNone": "Not set", "opt.effortMinimal": "Minimal", "opt.effortLow": "Low", "opt.effortMedium": "Medium", "opt.effortHigh": "High",
     "set.effortHint": "Default is Medium. Higher effort makes translation slower. Choose Not set for non-reasoning models.",
     "set.micDev": "Microphone", "opt.micDefault": "System default", "opt.micN": "Microphone {n}", "opt.micMissing": "Previously selected microphone (not connected)", "set.micDevHint": "Switching while listening takes effect immediately.", "set.micDevNoLabel": "Device names appear here after you start listening and allow microphone access.", "flash.micFallback": "The selected microphone is unavailable; using the system default instead.", "u.x": "{v}×", "u.ms": "{v} ms", "u.s": "{v} s", "u.px": "{v} px", "u.pct": "{v}%",
-    "spk.btn": "Speakers", "spk.title": "Speaker identification", "spk.beta": "Experimental", "spk.close": "Close", "spk.run": "Analyze", "spk.rerun": "Analyze again",
-    "spk.intro": "Step 1: analyzes the voices on this device and groups similar ones together. No API usage. The first run downloads about 40 MB of components. Afterwards each subtitle line shows its group's tag.",
+    "spk.btn": "Speakers", "spk.title": "Speaker identification", "spk.beta": "Experimental", "spk.close": "Close",
+   
     "spk.listHint": "You can name the groups directly. If one person is split into several groups, give them the same name to merge them. Tap Listen to hear the most typical clip of a group.",
     "spk.dist": "Grouping sensitivity", "spk.distLoose": "Merge more", "spk.distStd": "Standard (recommended)", "spk.distFine": "Split more", "spk.distHint": "Start with Standard. After analysis, if one person is split into several groups, choose Merge more; if two people end up in one group (one person's tag appears on lines someone else said), choose Split more. Takes effect immediately without re-analyzing; earlier GPT results are discarded and need to be run again.",
    
-    "spk.show": "Show speakers in the subtitle list, on the video, and in exported files",
-    "spk.clear": "Clear results", "spk.clearSure": "Tap again to clear", "spk.judge": "Refine with GPT", "spk.judgeAgain": "Refine with GPT again", "spk.judging": "GPT is identifying speakers from the subtitles and template…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
-    "spk.judgeHint": "Step 2 (optional): GPT uses the subtitles and the current template (people and speaker cues) to work out who each group is and fills in lines where the voice match is uncertain, such as self-introductions or answers after being addressed. Uses the API, a few cents per episode. Tags decided by GPT have a dashed outline; hover to see why. Names you set always take priority.",
+   
+    "spk.judging": "GPT is identifying speakers in {n} lines, {s}s so far (usually under a minute per episode)…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
+   
     "spk.by.self_intro": "GPT: self-introduction", "spk.by.addressed": "GPT: answers when addressed", "spk.by.turn_taking": "GPT: turn-taking", "spk.by.content": "GPT: content and speaking habits", "spk.by.voice": "GPT: voice", "spk.by.unknown": "GPT",
-    "sec.spk": "Speakers", "spk.settings": "Display and grouping settings", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
-    "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Extracting audio…", "spk.embed": "Analyzing voices {i} / {n} clips",
-    "spk.done": "{n} speech clips in {k} groups; {a} of {b} lines labeled.", "spk.none": "Not analyzed yet. Analysis takes a minute or two; keep this page open.",
+    "sec.spk": "Speakers", "spk.settings": "Display and grouping settings", "spk.on": "Identify speakers", "spk.onHint": "When on, each subtitle line is tagged with who said it: voices are first analyzed and grouped on this device (the first run downloads about 40 MB, no API usage), then GPT uses the subtitles and the current template's people and speaker cues to work out who each group is and fill in uncertain lines (uses the API, a few cents per episode). Runs automatically when a file finishes processing, or right away for files that are already done. Results appear in the subtitles, on the video and in exported files; turning this off hides them without deleting them.", "spk.introOff": "Speaker identification is off. Turn it on to tag each subtitle line with who said it.", "spk.introOn": "These are the speaker groups found. You can rename them; give groups the same name to merge them. After editing, tap Identify again and GPT will re-check using your names.", "spk.enable": "Turn on speaker identification", "spk.start": "Identify speakers", "spk.rerun": "Identify again", "spk.none": "Not identified yet. Tap Identify speakers.", "spk.wait": "Identification starts automatically when the file finishes processing.", "spk.needKey": "GPT identification needs an API key. Add one in Settings first.", "spk.done": "{k} groups; {a} of {b} lines tagged.", "file.spk": "Subtitles done · Speakers: {m}", "spk.confirm": "Before turning this on: the first run downloads about 40 MB of voice-analysis components (cached by the browser afterwards), so Wi-Fi is recommended. Each file also makes one GPT request, billed to your API key, about a few cents per episode.", "spk.confirmOk": "Turn on", "spk.confirmNo": "Not now", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
+    "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Re-extracting the audio track…", "spk.embed": "Analyzing voices {i} / {n} clips",
+   
     "spk.err": "Analysis failed: {m}", "spk.needMedia": "The original file is required. Select it again first.", "spk.busy": "The file is being processed. Analyze after it finishes or is paused.", "sec.audio": "Audio capture", "set.audioHint": "All settings take effect when you tap Done, except the last three system options, which require stopping and restarting. Microphone changes apply immediately.",
     "set.gain": "Microphone gain", "opt.gainAuto": "Automatic", "opt.gain1": "No amplification", "set.gainHint": "Default is Automatic; the info bar at the bottom shows the current gain. If no subtitles appear far from the source, first check that the signal bars on the left of the info bar are moving.",
     "set.maxGain": "Automatic gain limit", "set.agcTarget": "Automatic gain target level", "set.vad": "Recognition sensitivity", "set.silence": "Silence before sentence break", "set.maxTurn": "Maximum sentence duration", "set.prefix": "Leading audio retained",
@@ -367,8 +367,8 @@ function migrateToSessions() {
 
 function loadSettings() {
   $("#spkDist").value = ["0.4", "0.5", "0.6"].includes(sget("spkDist", "0.5")) ? sget("spkDist", "0.5") : "0.5"; $("#secSpk").hidden = !isFileSess();
-  $("#spkShow").checked = sget("spkShow", "1") === "1";
-  document.body.classList.toggle("nospk", !$("#spkShow").checked);
+  $("#spkOn").checked = spkOn();
+  document.body.classList.toggle("nospk", !spkOn());
   $("#uiLang").value = uiLang;
   $("#apiKey").value = store.get("apiKey", "");
   $("#asrModel").value = sget("asrModel", ASR_MODEL);
@@ -991,6 +991,7 @@ $("#mediaFile").onchange = async () => {
   ss.file.stored = await storeMedia(ss.id, f);
   if (!ss.file.stored) flash(t("file.noStore"));
   saveSessions(); useSession(ss.id); show("live");
+  if (ss.done) spkAuto(ss);
 };
 async function setupFileView() {
   const on = isFileSess();
@@ -1025,16 +1026,26 @@ $("#player").ontimeupdate = () => {
 function seekTo(ms) { const p = $("#player"); if (!p.src) return; spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
 // ffmpeg.wasm 核心(约 32 MB)随页面同源发布,首次用到时才加载,之后走浏览器缓存
 let ffmpegP = null;
-function loadFfmpeg() {
+// 带进度下载(用于 32 MB 的 ffmpeg 核心和 28 MB 的声纹模型);已缓存时很快走完
+async function fetchProgress(url, onPct, guess) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url.split("/").pop()} ${res.status}`);
+  const total = Number(res.headers.get("content-length")) || guess, rd = res.body.getReader(), parts = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onPct && onPct(Math.min(1, got / total)); }
+  const buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
+  return buf;
+}
+function loadFfmpeg(onPct) {
   return (ffmpegP ||= (async () => {
     const ff = new FFmpeg();
-    await ff.load({ coreURL: new URL(ffmpegCore, location.href).href, wasmURL: new URL(ffmpegWasm, location.href).href });
+    const wasm = URL.createObjectURL(new Blob([await fetchProgress(new URL(ffmpegWasm, location.href).href, onPct, 32232419)], { type: "application/wasm" }));
+    try { await ff.load({ coreURL: new URL(ffmpegCore, location.href).href, wasmURL: wasm }); } finally { URL.revokeObjectURL(wasm); }
     return ff;
   })().catch((e) => { ffmpegP = null; throw e; }));
 }
 async function extractPcm(blob) {
-  fileJob.phase = "loading"; fileProgress();
-  const ff = await loadFfmpeg();
+  fileJob.phase = "loading"; fileJob.loadPct = 0; fileProgress();
+  const ff = await loadFfmpeg((p) => { fileJob.loadPct = p; fileProgress(); });
   fileJob.phase = "extract"; fileJob.extractPct = 0; fileProgress();
   const onP = ({ progress }) => { fileJob.extractPct = Math.max(0, Math.min(1, progress || 0)); fileProgress(); };
   ff.on("progress", onP);
@@ -1154,7 +1165,7 @@ function fileFinish(ss) {
   ss.done = true; ss.progress = J.total; saveSessions();
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   setGoFile(); setStatus("status.done", "on"); fileProgress();
-  spkRevote(ss); // 之前做过说话人分析:新字幕直接按已有结果标注
+  spkAfterFile(ss); // 开着说话人识别:自动识别;之前识别过:先按已有声纹结果标注新字幕,GPT 判定重做
 }
 function filePause(isErr) {
   const J = fileJob;
@@ -1176,11 +1187,12 @@ function fileProgress() {
   const ss = curSess, J = fileJob, total = J.total || (ss.file && ss.file.duration) || 0;
   const done = lines.filter((l) => l.done).length, n = lines.length, pos = J.active ? J.pos : ss.progress || 0;
   let pct = total ? pos / total : 0, txt;
-  const fill = $("#pfill"); fill.classList.toggle("busy", J.phase === "loading" || J.phase === "extract" || J.phase === "flush");
-  if (J.phase === "loading") { txt = t("file.loading"); pct = 0; }
+  const fill = $("#pfill"); fill.classList.toggle("busy", J.phase === "flush");
+  if (J.phase === "loading") { txt = t("file.loading", { pct: Math.round((J.loadPct || 0) * 100) }); pct = J.loadPct || 0; }
   else if (J.phase === "extract") { txt = t("file.extract", { pct: Math.round(J.extractPct * 100) }); pct = J.extractPct; }
   else if (J.phase === "run") { const left = (total - pos) / FILE_SPEED + (n - done) * 400; txt = t("file.run", { pct: Math.round(pct * 100), pos: fmtClock(pos), total: fmtClock(total), speed: FILE_SPEED, eta: fmtClock(left), done, n }); }
   else if (J.phase === "flush") { txt = t("file.flush", { done, n }); pct = 1; }
+  else if ((J.phase === "done" || ss.done) && spkRunning() && spkNow.msg) { txt = t("file.spk", { m: spkNow.msg }); pct = spkNow.p == null ? 1 : spkNow.p; fill.classList.toggle("busy", spkNow.p == null); }
   else if (J.phase === "done" || ss.done) { txt = t("file.done", { total: fmtClock(total), n }); pct = 1; }
   else if (J.phase === "error") txt = t("file.err", { m: J.err || "?" });
   else if (!mediaBlob) txt = t("file.missing");
@@ -1210,7 +1222,8 @@ const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8
 let spk = null, spkBusy = false, spkStopAt = null, spkModelP = null;
 // 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
 const SPK_SHARE = 0.85;
-function spkPrefix(l) { return l.spk && $("#spkShow").checked ? l.spk + (CJK.test(l.tgt || l.src || "") ? "：" : ": ") : ""; }
+function spkOn() { return sget("spkOn", "0") === "1"; }
+function spkPrefix(l) { return l.spk && spkOn() ? l.spk + (CJK.test(l.tgt || l.src || "") ? "：" : ": ") : ""; }
 function spkName(c) { return (spk.names[c] || "").trim() || (spk.llm && spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
 function paintSpk(l) {
   const tm = l.el.querySelector(".tm"); if (!tm) return;
@@ -1224,11 +1237,7 @@ function paintSpk(l) {
 function loadSpkModel(onPct) {
   return (spkModelP ||= (async () => {
     ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
-    const res = await fetch(SPK_MODEL);
-    if (!res.ok) throw new Error("model " + res.status);
-    const total = Number(res.headers.get("content-length")) || 28281138, rd = res.body.getReader(), parts = []; let got = 0;
-    for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onPct && onPct(Math.min(1, got / total)); }
-    const buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
+    const buf = await fetchProgress(SPK_MODEL, onPct, 28281138);
     return ort.InferenceSession.create(buf, { executionProviders: ["wasm"] });
   })().catch((e) => { spkModelP = null; throw e; }));
 }
@@ -1255,9 +1264,9 @@ async function spkAnalyze() {
   spkBusy = true; renderSpk(); spkBar(0);
   try {
     spkMsg(t("spk.loadModel", { pct: 0 }));
-    const model = await loadSpkModel((p) => { spkMsg(t("spk.loadModel", { pct: Math.round(p * 100) })); spkBar(p); });
+    const model = await loadSpkModel((p) => { spkBar(p); spkMsg(t("spk.loadModel", { pct: Math.round(p * 100) })); });
     if (!fileJob.pcm) {
-      spkMsg(t("spk.extract")); spkBar(0);
+      spkBar(null); spkMsg(t("spk.extract"));
       const keep = fileJob.phase;
       try { fileJob.pcm = await extractPcm(mediaBlob); } finally { fileJob.phase = keep; fileProgress(); }
     }
@@ -1266,7 +1275,7 @@ async function spkAnalyze() {
     for (let i = 0; i < n; i++) {
       if (curSess !== ss) return;
       emb.set(await spkEmbed(model, spkResample(pcm, Math.round(segs[i][0] * 24000), Math.round(segs[i][1] * 24000))), i * SPK_DIM);
-      if (i % 4 === 0) { spkMsg(t("spk.embed", { i, n })); spkBar(i / n); }
+      if (i % 4 === 0) { spkBar(i / n); spkMsg(t("spk.embed", { i, n })); }
     }
     const old = spk && spk.sid === ss.id ? spk : null;
     spk = { sid: ss.id, segs: Float32Array.from(segs.flat()), emb, n, cents: old ? old.cents : null, names: old ? old.names : [] };
@@ -1348,8 +1357,10 @@ let spkJudging = false;
 async function spkJudge() {
   const ss = curSess;
   if (!spk || spkJudging || !ss) return;
-  if (!cfg.hasKey) { openSettings(); $("#apiKey").focus(); return; }
-  spkJudging = true; renderSpk(); spkMsg(t("spk.judging"));
+  applySettings();
+  if (!cfg.hasKey) return spkMsg(t("spk.needKey"));
+  spkJudging = true; renderSpk(); spkBar(null);
+  const t0 = Date.now(), tick = () => spkMsg(t("spk.judging", { s: Math.round((Date.now() - t0) / 1000), n: lines.length })), timer = setInterval(tick, 1000); tick();
   try {
     const g = cfg.glossary, tl = lines.filter((l) => l.ms != null && (l.src || l.raw));
     const r = await judgeSpeakers({
@@ -1369,22 +1380,42 @@ async function spkJudge() {
     const names = spk.groups.map(() => ""); for (const x of r.groups) if (x.name) names[x.k] = x.name;
     spk.llm = { names, lines: [...r.lines].map(([id, v]) => [id, v.who, v.basis]), at: Date.now() };
     spkVote(); spkSave();
-  } catch (e) { console.error(e); spkMsg(t("spk.err", { m: e.message || String(e) })); spkJudging = false; renderSpk(false); return; }
-  finally { spkJudging = false; }
+  } catch (e) { console.error(e); clearInterval(timer); spkJudging = false; spkMsg(t("spk.err", { m: e.message || String(e) })); renderSpk(false); return; }
+  finally { spkJudging = false; clearInterval(timer); spkBar(null); }
   if (curSess === ss) renderSpk();
 }
-async function spkRevote(ss) { if (curSess !== ss) return; if (await spkLoad()) { spkVote(); if (!$("#spkPanel").hidden) renderSpk(); } }
-function spkMsg(m) { $("#spkMsg").textContent = m; }
-function spkBar(p) { $("#spkBar").hidden = p == null; if (p != null) $("#spkBar i").style.width = Math.round(p * 1000) / 10 + "%"; }
+// 开着说话人识别时自动跑完两步:本机声纹分析(没做过才做)→ GPT 判定(没判过或已作废才判)
+let spkAutoP = null;
+function spkAuto(ss = curSess) {
+  if (!ss || ss !== curSess || !spkOn() || !isFileSess() || fileJob.active || !ss.done || spkAutoP) return spkAutoP;
+  return (spkAutoP = (async () => {
+    try {
+      await spkLoad();
+      if (!spk) { if (!mediaBlob) return spkMsg(t("spk.needMedia")); await spkAnalyze(); }
+      if (spk && curSess === ss && !spk.llm) await spkJudge();
+    } finally { spkAutoP = null; if (curSess === ss) { if (!$("#spkPanel").hidden) renderSpk(); fileProgress(); } }
+  })());
+}
+async function spkAfterFile(ss) {
+  if (curSess !== ss) return;
+  if (await spkLoad()) { spk.llm = null; spkVote(); spkSave(); } // 字幕重新生成了,旧的 GPT 判定对不上
+  spkAuto(ss);
+}
+// 面板里的进度同步到主进度条(spkNow 记下当前这一步)
+const spkNow = { msg: "", p: null };
+function spkRunning() { return spkBusy || spkJudging || !!spkAutoP; }
+function spkMsg(m) { $("#spkMsg").textContent = m; spkNow.msg = m; fileProgress(); }
+function spkBar(p) { $("#spkBar").hidden = p == null; if (p != null) $("#spkBar i").style.width = Math.round(p * 1000) / 10 + "%"; spkNow.p = p; fileProgress(); }
 function spkPanel(on) { $("#spkPanel").hidden = !on; document.body.classList.toggle("spkopen", on); }
 function renderSpk(msg = true) {
-  $("#spkRun").textContent = t(spk ? "spk.rerun" : "spk.run"); $("#spkRun").disabled = spkBusy || spkJudging;
-  $("#spkJudgeBox").hidden = !spk; $("#spkJudge").disabled = spkBusy || spkJudging;
-  $("#spkJudge").textContent = t(spk && spk.llm ? "spk.judgeAgain" : "spk.judge");
-  $("#spkClear").hidden = !spk; $("#spkListHint").hidden = !spk;
+  const on = spkOn(), busy = spkBusy || spkJudging || !!spkAutoP;
+  $("#spkIntro").textContent = t(on ? "spk.introOn" : "spk.introOff");
+  $("#spkRun").textContent = t(!on ? "spk.enable" : spk ? "spk.rerun" : "spk.start"); $("#spkRun").disabled = busy || (on && !(curSess && curSess.done));
+  $("#spkListHint").hidden = !spk || !on;
   const list = $("#spkList"); list.replaceChildren();
-  if (!spk) { if (!spkBusy) spkMsg(t(mediaBlob ? "spk.none" : "spk.needMedia")); return; }
-  if (!spkBusy && !spkJudging && msg) spkMsg(t("spk.done", { n: spk.n, k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
+  if (!on) { if (!busy) spkMsg(""); return; }
+  if (!spk) { if (!busy) spkMsg(t(!(curSess && curSess.done) ? "spk.wait" : mediaBlob ? "spk.none" : "spk.needMedia")); return; }
+  if (!busy && msg) spkMsg(t("spk.done", { k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
   spk.groups.forEach((g, k) => {
     const ai = spk.llm && spk.llm.names[k];
     const inp = el("input", { type: "text", value: spk.names[k] || "", placeholder: ai ? ai + " · AI" : t("spk.n", { n: k + 1 }) });
@@ -1396,18 +1427,29 @@ function renderSpk(msg = true) {
 }
 $("#spkOpen").onclick = async () => { spkPanel(true); renderSpk(); await spkLoad(); renderSpk(); };
 $("#spkClose").onclick = () => spkPanel(false);
-$("#spkRun").onclick = spkAnalyze;
-$("#spkJudge").onclick = spkJudge;
+$("#spkRun").onclick = () => {
+  if (!spkOn()) return spkAskEnable();
+  if (spk) { spk.llm = null; spkVote(); spkSave(); } // 重新识别:保留声纹分组和你起的名字,GPT 重新判定
+  spkAuto(); renderSpk();
+};
 $("#spkSettings").onclick = () => { openSettings(); $("#secSpk").scrollIntoView({ block: "start" }); };
-$("#spkDist").onchange = async () => { sset("spkDist", $("#spkDist").value === "0.5" ? null : $("#spkDist").value); if (await spkLoad()) { spkRecluster(true); spkSave(); if (!$("#spkPanel").hidden) renderSpk(); } };
-$("#spkShow").onchange = () => { sset("spkShow", $("#spkShow").checked ? null : "0"); document.body.classList.toggle("nospk", !$("#spkShow").checked); };
-$("#spkClear").onclick = () => {
-  const b = $("#spkClear");
-  if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = t("spk.clearSure"); setTimeout(() => { delete b.dataset.armed; b.textContent = t("spk.clear"); }, 3000); return; }
-  delete b.dataset.armed; b.textContent = t("spk.clear");
-  if (spk) idb.del("spk:" + spk.sid).catch(() => {});
-  spk = null; for (const l of lines) { delete l.spk; delete l.spc; delete l.spkBy; paintSpk(l); }
-  saveLines(); renderSpk();
+$("#spkDist").onchange = async () => { sset("spkDist", $("#spkDist").value === "0.5" ? null : $("#spkDist").value); if (await spkLoad()) { spkRecluster(true); spkSave(); if (!$("#spkPanel").hidden) renderSpk(); spkAuto(); } };
+// 第一次开启先确认(要下载约 40 MB 组件、GPT 判定消耗 API),确认过一次就不再问
+function spkAskEnable() {
+  if (store.get("spkConsent", "") === "1") return spkSetOn(true);
+  $("#spkOn").checked = false; $("#spkConfirm").hidden = false;
+  if ($("#settings").hidden) openSettings();
+  $("#secSpk").scrollIntoView({ block: "start" });
+}
+$("#spkConfirmOk").onclick = () => { store.set("spkConsent", "1"); $("#spkConfirm").hidden = true; spkSetOn(true); };
+$("#spkConfirmNo").onclick = () => { $("#spkConfirm").hidden = true; };
+$("#spkOn").onchange = () => { if ($("#spkOn").checked) spkAskEnable(); else { $("#spkConfirm").hidden = true; spkSetOn(false); } };
+function spkSetOn(on) {
+  $("#spkOn").checked = on;
+  sset("spkOn", on ? "1" : null); document.body.classList.toggle("nospk", !spkOn());
+  for (const l of lines) paintSpk(l);
+  if (!$("#spkPanel").hidden) renderSpk();
+  spkAuto();
 };
 
 // ---------- 会话列表 ----------
