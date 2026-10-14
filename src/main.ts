@@ -17,7 +17,7 @@ const store = {
 };
 function el(tag, props = {}, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter((k) => k != null)); return e; }
 
-function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value) + (uiLang === "zh" ? "" : " ") + t("set.mtModelHint"); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value); }
+function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value) + (uiLang === "zh" ? "" : " ") + t("set.ctModelHint"); }
 
 // 滑动条刻度:每项列出带数字的主刻度,默认值高亮;点刻度直接跳到该值
 const TICKS = {
@@ -97,7 +97,7 @@ const I18N = {
     "set.keyHint": "可留空。留空时通过本站服务器转发请求并使用服务器配置的密钥，密钥不会出现在网页中。填写后将直接连接 OpenAI，密钥仅保存在本设备的浏览器中。",
     "set.keyHintByok": "密钥仅保存在本设备的浏览器中，页面直接连接 OpenAI，不经过任何服务器。",
     "sec.lang": "语言", "set.langHint": "仅对当前会话生效，不会修改模板，点击“完成”后生效。", "set.editTpl": "编辑当前模板", "set.curTpl": "当前模板：{name}",
-    "sec.models": "模型", "set.asrModel": "语音识别模型", "set.mtModel": "翻译模型", "set.mtModelHint": "同时用于整理摘要。", "set.effort": "翻译推理强度", "set.ctModel": "模板生成模型",
+    "sec.models": "模型", "set.asrModel": "语音识别模型", "set.mtModel": "翻译模型", "set.effort": "翻译推理强度", "set.ctModel": "模板生成模型", "set.ctModelHint": "同时用于说话人判定和整理摘要。",
     "ctDesc.gpt-6.1-sol": "默认模型。用于和 GPT 对话创建模板，联网检索与整理词表效果好。",
     "ctDesc.gpt-6-luna": "费用约为 gpt-6.1-sol 的十分之一，资料整理可能不够完整。",
     "asrDesc.gpt-transcribe": "按句识别，准确度高，词表将作为关键词使用，费用约为 gpt-live-transcribe 的四分之一。",
@@ -181,7 +181,7 @@ const I18N = {
     "set.keyHint": "Optional. If left blank, requests are relayed through this site's server using its configured key, which never appears in the page. If you enter a key, the page connects to OpenAI directly and the key is stored only in this browser.",
     "set.keyHintByok": "The key is stored only in this browser. The page connects to OpenAI directly without going through any server.",
     "sec.lang": "Languages", "set.langHint": "Applies to the current session only and does not change the template. Takes effect when you tap Done.", "set.editTpl": "Edit current template", "set.curTpl": "Current template: {name}",
-    "sec.models": "Models", "set.asrModel": "Speech recognition model", "set.mtModel": "Translation model", "set.mtModelHint": "Also used for summaries.", "set.effort": "Translation reasoning effort", "set.ctModel": "Template creation model",
+    "sec.models": "Models", "set.asrModel": "Speech recognition model", "set.mtModel": "Translation model", "set.effort": "Translation reasoning effort", "set.ctModel": "Template creation model", "set.ctModelHint": "Also used for speaker identification and summaries.",
     "ctDesc.gpt-6.1-sol": "Default. Used when creating templates with GPT; good results for web research and glossary building.",
     "ctDesc.gpt-6-luna": "About one tenth the cost of gpt-6.1-sol; research may be less thorough.",
     "asrDesc.gpt-transcribe": "Sentence-by-sentence recognition with high accuracy; the glossary is used as keywords. About a quarter of the cost of gpt-live-transcribe.",
@@ -1905,11 +1905,11 @@ $("#recap").onclick = async (e) => {
   try {
     const res = await fetch(cfg.apiBase + "/chat/completions", {
       method: "POST", headers: apiHeaders(),
-      body: JSON.stringify({ model: cfg.mtModel, ...effort(), messages: [{ role: "user", content:
+      body: JSON.stringify({ model: cfg.ctModel, reasoning_effort: "medium", messages: [{ role: "user", content:
         `Below is a live subtitle log of "${cfg.tpl.name}" (ASR + live correction; may still contain recognition errors). Write in ${tgt}, plain text:\n1. Summary (about 300 words or 300 characters): what happened, segments, highlights and important announcements (events, merchandise, release dates — list dates exactly).\n2. Section by section: split by segment/topic, give each a short heading, and rewrite the content as clear, complete prose.\n3. Uncertain points: places where the ASR may have misheard or that cannot be determined.\n\nTemplate context:\n${glossaryForLLM()}\n\nLog (time | original | live translation):\n${body}` }] }),
     });
     if (!res.ok) throw new Error(res.status + " " + (await res.text()).slice(0, 200));
-    const rd = await res.json(); addMtCost(cfg.mtModel, rd.usage);
+    const rd = await res.json(); addMtCost(cfg.ctModel, rd.usage);
     $("#recapOut").textContent = rd.choices[0].message.content;
   } catch (err) { $("#recapOut").textContent = t("rec.recapFail") + err.message; }
   e.target.disabled = false;
