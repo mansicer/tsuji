@@ -415,3 +415,9 @@ body.filemode #go::before { width: 14px; height: 14px; }
   body.filemode .controls { grid-column: 1; }
   body.filemode #go { flex: 1; padding: 10px 16px; }
 }
+
+/* 翻译记忆 */
+#memoBox { margin: 10px 0; }
+#memoBox summary { cursor: pointer; color: var(--fg); font-size: 14px; padding: 4px 0; }
+#memoList { margin: 6px 0 8px; padding-left: 22px; font-size: 13px; line-height: 1.5; color: var(--dim); }
+#memoList li.empty { list-style: none; margin-left: -22px; }

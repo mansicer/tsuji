@@ -5,6 +5,7 @@ import ffmpegCore from "@ffmpeg/core?url";
 import ffmpegWasm from "@ffmpeg/core/wasm?url";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
+import { applyMemo, memoPrompt, MEMO_SCHEMA } from "./memo";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 
@@ -130,7 +131,7 @@ const I18N = {
     "sec.display": "显示", "set.showSrc": "显示原文", "set.fontSize": "译文字号",
     "sec.records": "字幕记录", "rec.copy": "复制全部字幕", "rec.save": "下载字幕", "rec.clear": "清空记录", "rec.clearSure": "再次点击以确认清空",
     "rec.copied": "已复制", "rec.copyFail": "复制失败，请使用下载", "rec.resetCost": "费用清零", "rec.costCleared": "已清零",
-    "rec.recap": "生成摘要", "rec.recapBusy": "正在生成摘要，内容较多时可能需要一至两分钟。", "rec.recapEmpty": "暂无字幕记录。", "rec.recapFail": "摘要生成失败：",
+    "rec.memo": "翻译记忆 · {n} 条", "rec.memoHint": "翻译时模型会把对后续翻译有用的信息(谁在场、当前话题、昵称、某个词指什么等)记在这里,之后每次翻译都会参考;过时或有误的会自行删掉。按会话保存,最多 30 条。", "rec.memoEmpty": "还没有记录。", "rec.memoClear": "清空记忆", "rec.memoCleared": "已清空", "rec.recap": "生成摘要", "rec.recapBusy": "正在生成摘要，内容较多时可能需要一至两分钟。", "rec.recapEmpty": "暂无字幕记录。", "rec.recapFail": "摘要生成失败：",
     "sec.adv": "高级", "set.apiBase": "API 地址", "set.ver": "版本 {v}",
     "tpl.blank": "通用模板", "tpl.blankDesc": "",
   },
@@ -214,7 +215,7 @@ const I18N = {
     "sec.display": "Display", "set.showSrc": "Show original text", "set.fontSize": "Subtitle size",
     "sec.records": "Transcript", "rec.copy": "Copy all subtitles", "rec.save": "Download subtitles", "rec.clear": "Clear transcript", "rec.clearSure": "Tap again to confirm",
     "rec.copied": "Copied", "rec.copyFail": "Copy failed. Please use Download", "rec.resetCost": "Reset spend", "rec.costCleared": "Reset complete",
-    "rec.recap": "Generate summary", "rec.recapBusy": "Generating summary. This may take a minute or two for long transcripts.", "rec.recapEmpty": "No subtitles recorded yet.", "rec.recapFail": "Summary failed: ",
+    "rec.memo": "Translation memory · {n}", "rec.memoHint": "While translating, the model notes things useful for later lines here (who is present, the current topic, nicknames, what a term refers to, etc.) and uses them in every following translation; outdated or wrong notes are removed by the model. Saved per session, up to 30 notes.", "rec.memoEmpty": "Nothing noted yet.", "rec.memoClear": "Clear memory", "rec.memoCleared": "Cleared", "rec.recap": "Generate summary", "rec.recapBusy": "Generating summary. This may take a minute or two for long transcripts.", "rec.recapEmpty": "No subtitles recorded yet.", "rec.recapFail": "Summary failed: ",
     "sec.adv": "Advanced", "set.apiBase": "API base URL", "set.ver": "Version {v}",
     "tpl.blank": "General", "tpl.blankDesc": "",
   },
@@ -326,6 +327,7 @@ function useSession(id) {
     lines.length = 0; history.length = 0; queue.length = 0; nextId = 0;
     $("#log").replaceChildren(); $("#partial").textContent = "";
     if (curSess) restoreLines();
+    loadMemo();
   }
 }
 // 会话引用模板:模板改了(补词表等)这里重新取;语言用会话自己的
@@ -340,7 +342,7 @@ function refreshTemplate() {
   if (view === "live" && curSess) $("#title").textContent = curSess.name;
 }
 function deleteSession(id) {
-  sessions = sessions.filter((x) => x.id !== id); saveSessions(); store.set("slines." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
+  sessions = sessions.filter((x) => x.id !== id); saveSessions(); store.set("slines." + id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
   if (curSess && curSess.id === id) useSession(sessions.length ? [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
 }
 // 旧版数据(字幕按模板存、设置全局存)升级成会话:每个有字幕的模板一个会话,当前设置带进去。只复制,不删旧数据
@@ -454,19 +456,29 @@ How to work:
 3. One output item per input item, same id. Return empty "src" and "tgt" only when the input is pure noise, applause or music with no recognizable words. Far-field ASR is often fragmentary: if any meaning can be recovered, translate it, marking uncertain parts with "(?)".
 4. If a segment is already in ${tgt}, still return it in "tgt" (cleaned up).
 5. "Recent context" is only for understanding references and topics; do not translate it again.
+6. "Running notes" are facts you recorded earlier for translating later lines. Use them. In "memory", you may add notes that will help translate later lines and are not already covered by the glossary or notes: who is present or speaking, the current segment/topic, nicknames and how people address each other, what an ambiguous word or name refers to here, recurring jokes, how you resolved a mishearing. One short sentence each, written in English. Add nothing for ordinary lines (usually "add" is empty). Put in "drop" the numbers of notes that became outdated or turned out wrong.
 
 ${glossaryForLLM()}`;
 };
 const SCHEMA = {
   type: "object", additionalProperties: false, required: ["items"],
   properties: { items: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "src", "tgt"],
-    properties: { id: { type: "integer" }, src: { type: "string" }, tgt: { type: "string" } } } } },
+    properties: { id: { type: "integer" }, src: { type: "string" }, tgt: { type: "string" } } } }, memory: MEMO_SCHEMA },
 };
+SCHEMA.required.push("memory");
 
 // ---------- 字幕列表 ----------
 const lines = [];          // {id, raw, src, tgt, t, el}
 let follow = true;
 function linesKey() { return "slines." + (curSess ? curSess.id : "none"); }
+// 翻译记忆(见 memo.ts):按会话存,随字幕一起清空
+let memo = [];
+function loadMemo() { memo = curSess ? store.json("smemo." + curSess.id, []) : []; renderMemo(); }
+function setMemo(next, ss = curSess) { if (ss !== curSess) return; memo = next; if (ss) store.set("smemo." + ss.id, memo.length ? JSON.stringify(memo) : null); renderMemo(); }
+function renderMemo() {
+  $("#memoSum").textContent = t("rec.memo", { n: memo.length });
+  $("#memoList").replaceChildren(...(memo.length ? memo.map((m) => el("li", { textContent: m })) : [el("li", { className: "empty", textContent: t("rec.memoEmpty") })]));
+}
 function showEmptyHint() {
   if (isFileSess()) return;
   if (lines.length || $("#log").children.length) return;
@@ -566,10 +578,10 @@ async function pumpTranslate() {
   if (translating || !queue.length) return;
   translating = true;
   const batch = queue.splice(0, 6);
-  const tplId = cfg.tpl.id;
+  const tplId = cfg.tpl.id, ss = curSess;
   try {
     const ctx = history.slice(-8).map((l) => `${l.src} → ${l.tgt}`).join("\n") || "(none)";
-    const user = `Recent context (already translated, reference only):\n${ctx}\n\nNew ASR segments:\n` + JSON.stringify(batch.map((l) => ({ id: l.id, asr: l.raw })));
+    const user = `Running notes:\n${memoPrompt(memo)}\n\nRecent context (already translated, reference only):\n${ctx}\n\nNew ASR segments:\n` + JSON.stringify(batch.map((l) => ({ id: l.id, asr: l.raw })));
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 30000);
     const mtStart = performance.now();
@@ -589,7 +601,8 @@ async function pumpTranslate() {
     lat.mt = performance.now() - mtStart; mtHist.push(lat.mt); if (mtHist.length > 10) mtHist.shift();
     lat.mtAvg = mtHist.reduce((a, b) => a + b, 0) / mtHist.length; showLat();
     if (cfg.tpl.id !== tplId) return; // 翻译途中换了模板,这批行已经不在页面上
-    const items = JSON.parse(data.choices[0].message.content).items || [];
+    const out = JSON.parse(data.choices[0].message.content), items = out.items || [];
+    setMemo(applyMemo(memo, out.memory), ss);
     const byId = new Map(items.map((it) => [it.id, it]));
     for (const l of batch) {
       const it = byId.get(l.id);
@@ -1076,7 +1089,7 @@ async function fileStart() {
   delete $("#go").dataset.armed;
   if (ss.done) { // 重新处理:清空字幕从头来
     clearTimeout(saveLinesTimer); lines.length = 0; history.length = 0; queue.length = 0; nextId = 0;
-    $("#log").replaceChildren(); store.set(linesKey(), null); ss.progress = 0; ss.done = false; ss.count = 0; saveSessions();
+    $("#log").replaceChildren(); store.set(linesKey(), null); ss.progress = 0; ss.done = false; ss.count = 0; saveSessions(); setMemo([]);
   }
   fileJob.active = true; fileJob.err = ""; setGoFile(); setStatus("status.processing", "on"); keepAwake();
   try {
@@ -1889,11 +1902,12 @@ $("#copyAll").onclick = async (e) => {
   catch { flashBtn(e.target, t("rec.copyFail")); }
 };
 $("#saveAll").onclick = () => download(fileName(curSess ? curSess.name : cfg.tpl.name) + ".txt", transcriptText());
+$("#memoClear").onclick = (e) => { setMemo([]); flashBtn(e.target, t("rec.memoCleared")); };
 $("#resetCost").onclick = (e) => { cost.asr = cost.mt = 0; cost.save(); showLat(); flashBtn(e.target, t("rec.costCleared")); };
 let clearArmed = false;
 $("#clearAll").onclick = (e) => {
   if (!clearArmed) { clearArmed = true; e.target.textContent = t("rec.clearSure"); setTimeout(() => { clearArmed = false; e.target.textContent = t("rec.clear"); }, 3000); return; }
-  lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; e.target.textContent = t("rec.clear");
+  lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; e.target.textContent = t("rec.clear"); setMemo([]);
   clearTimeout(saveLinesTimer); store.set(linesKey(), null); if (curSess) { curSess.count = 0; saveSessions(); } showEmptyHint();
 };
 $("#recap").onclick = async (e) => {
