@@ -29,6 +29,8 @@ No app to install. Every request goes straight from the browser to OpenAI, and y
 ## Features
 
 - **Templates**: background notes, people and terminology glossary, and translation style for a show or event. The same glossary feeds both recognition (prompt / keywords) and translation (fixing misheard names by their reading, keeping translations consistent). Create one by chatting with GPT and uploading material such as slides, or import / export them as JSON.
+- **Translation memory**: while translating, the model may keep short notes useful for later lines (who is present, the current topic, nicknames, what an ambiguous term refers to) and uses them for every following batch. Notes are saved per session and shown under Records.
+- **Summaries**: generate a summary of a session's subtitles; long logs are split into parts that fit the model's context and merged.
 - **Sessions**: each translation is a session with its own languages, models, audio and display settings, and subtitle history. Sessions survive page reloads and discarded tabs.
 - **File translation**: upload a video or audio file. The audio track is extracted in the browser with ffmpeg.wasm and processed at 4× speed. Subtitles are overlaid on the player in sync and can be exported as SRT / VTT.
 - **Speaker identification** (experimental, file sessions): a CAM++ speaker-embedding model runs locally in the browser to group voices, then GPT works out who each group is from the subtitles and the template's people and speaker cues. Each line is tagged with its speaker, at a cost of a few cents per episode. Confirmed voices can be saved into the template so people are recognized automatically next time.

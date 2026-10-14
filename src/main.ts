@@ -131,7 +131,7 @@ const I18N = {
     "sec.display": "显示", "set.showSrc": "显示原文", "set.fontSize": "译文字号",
     "sec.records": "字幕记录", "rec.copy": "复制全部字幕", "rec.save": "下载字幕", "rec.clear": "清空记录", "rec.clearSure": "再次点击以确认清空",
     "rec.copied": "已复制", "rec.copyFail": "复制失败，请使用下载", "rec.resetCost": "费用清零", "rec.costCleared": "已清零",
-    "rec.memo": "翻译记忆 · {n} 条", "rec.memoHint": "翻译时模型会把对后续翻译有用的信息(谁在场、当前话题、昵称、某个词指什么等)记在这里,之后每次翻译都会参考;过时或有误的会自行删掉。按会话保存,最多 30 条。", "rec.memoEmpty": "还没有记录。", "rec.memoClear": "清空记忆", "rec.memoCleared": "已清空", "rec.recap": "生成摘要", "rec.recapBusy": "正在生成摘要，内容较多时可能需要一至两分钟。", "rec.recapEmpty": "暂无字幕记录。", "rec.recapFail": "摘要生成失败：",
+    "rec.memo": "翻译记忆 · {n} 条", "rec.memoHint": "翻译时模型会把对后续翻译有用的信息(谁在场、当前话题、昵称、某个词指什么等)记在这里,之后每次翻译都会参考;过时或有误的会自行删掉。按会话保存,最多 30 条。", "rec.memoEmpty": "还没有记录。", "rec.memoClear": "清空记忆", "rec.memoCleared": "已清空", "rec.recap": "生成摘要", "rec.recapBusy": "正在生成摘要，内容较多时可能需要一至两分钟。", "rec.recapEmpty": "暂无字幕记录。", "rec.recapFail": "摘要生成失败：", "rec.recapPart": "记录较长，正在分段整理：第 {i} / {n} 段……", "rec.recapMerge": "正在把 {n} 段合并成摘要……",
     "sec.adv": "高级", "set.apiBase": "API 地址", "set.ver": "版本 {v}",
     "tpl.blank": "通用模板", "tpl.blankDesc": "",
   },
@@ -215,7 +215,7 @@ const I18N = {
     "sec.display": "Display", "set.showSrc": "Show original text", "set.fontSize": "Subtitle size",
     "sec.records": "Transcript", "rec.copy": "Copy all subtitles", "rec.save": "Download subtitles", "rec.clear": "Clear transcript", "rec.clearSure": "Tap again to confirm",
     "rec.copied": "Copied", "rec.copyFail": "Copy failed. Please use Download", "rec.resetCost": "Reset spend", "rec.costCleared": "Reset complete",
-    "rec.memo": "Translation memory · {n}", "rec.memoHint": "While translating, the model notes things useful for later lines here (who is present, the current topic, nicknames, what a term refers to, etc.) and uses them in every following translation; outdated or wrong notes are removed by the model. Saved per session, up to 30 notes.", "rec.memoEmpty": "Nothing noted yet.", "rec.memoClear": "Clear memory", "rec.memoCleared": "Cleared", "rec.recap": "Generate summary", "rec.recapBusy": "Generating summary. This may take a minute or two for long transcripts.", "rec.recapEmpty": "No subtitles recorded yet.", "rec.recapFail": "Summary failed: ",
+    "rec.memo": "Translation memory · {n}", "rec.memoHint": "While translating, the model notes things useful for later lines here (who is present, the current topic, nicknames, what a term refers to, etc.) and uses them in every following translation; outdated or wrong notes are removed by the model. Saved per session, up to 30 notes.", "rec.memoEmpty": "Nothing noted yet.", "rec.memoClear": "Clear memory", "rec.memoCleared": "Cleared", "rec.recap": "Generate summary", "rec.recapBusy": "Generating summary. This may take a minute or two for long transcripts.", "rec.recapEmpty": "No subtitles recorded yet.", "rec.recapFail": "Summary failed: ", "rec.recapPart": "The log is long; summarizing in parts: part {i} of {n}…", "rec.recapMerge": "Merging {n} parts into the summary…",
     "sec.adv": "Advanced", "set.apiBase": "API base URL", "set.ver": "Version {v}",
     "tpl.blank": "General", "tpl.blankDesc": "",
   },
@@ -1521,7 +1521,7 @@ function spkSetOn(on) {
 };
 
 // ---------- 会话列表 ----------
-function sessTranscript(arr) { return arr.filter((l) => l.src || l.tgt).map((l) => `[${new Date(l.t).toTimeString().slice(0, 8)}] ${l.tgt}\n           ${l.src}`).join("\n"); }
+function sessTranscript(arr) { return arr.filter((l) => l.src || l.tgt).map((l) => `[${l.s != null ? fmtClock(l.s) : new Date(l.t).toTimeString().slice(0, 8)}] ${l.tgt}\n           ${l.src}`).join("\n"); }
 function fileName(name) { return (name || "subs").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60); }
 function renderSessions() {
   $("#noKey").hidden = cfg.hasKey;
@@ -1607,14 +1607,15 @@ $("#importFile").onchange = async (e) => {
 $("#newTpl").onclick = () => openCreator(null);
 
 // ---------- 创建 / 编辑模板(和 GPT 对话) ----------
-// creator = { editId, draft: 模板字段, msgs: [{role, text}], prevId: 上一轮 Responses id };存本地,刷新不丢
-let creator = store.json("creator", null) || { editId: null, draft: null, msgs: [], prevId: null };
+// creator = { editId, draft: 模板字段, msgs: [{role, text}] };存本地,刷新不丢。每轮请求带上最近 CREATOR_TURNS 轮对话和当前草稿
+const CREATOR_TURNS = 10;
+let creator = store.json("creator", null) || { editId: null, draft: null, msgs: [] };
 let creatorBusy = false, glossTextMode = false;
 function saveCreator() { store.set("creator", JSON.stringify(creator)); }
 function blankDraft() { return { name: "", source: "ja", target: uiLang === "zh" ? "zh-Hans" : "en", description: "", style: "", asrPrompt: "", spkNotes: "", glossary: "" }; }
 function openCreator(tp) {
   const d = tp ? { name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "" } : blankDraft();
-  creator = { editId: tp ? tp.id : null, draft: d, msgs: [{ role: "note", text: tp ? t("create.welcomeEdit", { name: tp.name }) : t("create.welcome") }], prevId: null };
+  creator = { editId: tp ? tp.id : null, draft: d, msgs: [{ role: "note", text: tp ? t("create.welcomeEdit", { name: tp.name }) : t("create.welcome") }] };
   attachments = []; renderAttachments();
   saveCreator(); glossTextMode = false; setTab("chat"); show("create");
 }
@@ -1798,31 +1799,31 @@ async function creatorSend() {
   };
   let searchN = 0;
   const model = cfg.ctModel;
-  const call = async (prevId) => {
+  // 前几轮对话原样带上(不用 previous_response_id:订阅转发等不存记录的接口不支持,且重发文字比带上整段推理和检索结果更省)
+  const past = creator.msgs.slice(0, -1).filter((m) => m.role === "user" || m.role === "ai").slice(-CREATOR_TURNS * 2).map((m) => m.role === "user"
+    ? { role: "user", content: [{ type: "input_text", text: m.text + (m.files && m.files.length ? `\n\n(Attached: ${m.files.join(", ")})` : "") }] }
+    : { role: "assistant", content: [{ type: "output_text", text: m.text }] });
+  const call = async () => {
     const body = {
       model, reasoning: { effort: "medium" }, instructions: CREATOR_SYSTEM(), tools: [{ type: "web_search" }],
-      input: [{ role: "user", content: [
+      input: [...past, { role: "user", content: [
         { type: "input_text", text: `${text}${files.length ? `\n\n(Attached: ${files.map((a) => a.name).join(", ")})` : ""}\n\n---\nCurrent draft (JSON; may include the user's manual edits):\n${JSON.stringify(draftForGPT())}` },
         ...files.map((a) => a.part),
       ] }],
       text: { format: { type: "json_schema", name: "template_turn", strict: true, schema: CREATOR_SCHEMA } },
     };
-    if (prevId) body.previous_response_id = prevId;
     body.stream = true;
     const res = await fetch(cfg.apiBase + "/responses", { method: "POST", headers: apiHeaders(), body: JSON.stringify(body) });
     if (!res.ok) { const err = new Error(`${res.status}: ${(await res.text()).slice(0, 300)}`); err.status = res.status; throw err; }
     return readResponseStream(res, onStream);
   };
   try {
-    let d;
-    try { d = await call(creator.prevId); }
-    catch (e) { if (creator.prevId && e.status === 400) d = await call(null); else throw e; } // 上一轮记录过期就不带历史重来(草稿本身已经带上了)
+    const d = await call();
     const searches = (d.output || []).filter((o) => o.type === "web_search_call").length;
     addMtCost(model, d.usage, searches * WEB_SEARCH_PER_CALL);
     const msg = (d.output || []).find((o) => o.type === "message");
     const out = JSON.parse(((msg && msg.content) || []).map((c) => c.text || "").join(""));
     const tp = out.template;
-    creator.prevId = d.id;
     creator.draft = { name: tp.name, source: tp.source, target: tp.target, description: tp.description, style: tp.style, asrPrompt: tp.asrPrompt, spkNotes: tp.spkNotes, glossary: glossaryText(tp.speakers, tp.terms) };
     creator.msgs.push({ role: "ai", text: out.reply });
     creator.msgs.push({ role: "note", text: t("create.updated", { p: tp.speakers.length, n: tp.terms.length }) });
@@ -1853,7 +1854,7 @@ $("#dDiscard").onclick = (e) => {
   const b = e.target;
   if (!b.dataset.armed) { b.dataset.armed = "1"; flashBtn(b, t("draft.discardSure")); setTimeout(() => delete b.dataset.armed, 2000); return; }
   attachments = []; renderAttachments();
-  creator = { editId: null, draft: null, msgs: [], prevId: null }; store.set("creator", null); show("tpl");
+  creator = { editId: null, draft: null, msgs: [] }; store.set("creator", null); show("tpl");
 };
 
 // ---------- 设置面板 ----------
@@ -1910,22 +1911,54 @@ $("#clearAll").onclick = (e) => {
   lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; e.target.textContent = t("rec.clear"); setMemo([]);
   clearTimeout(saveLinesTimer); store.set(linesKey(), null); if (curSess) { curSess.count = 0; saveSessions(); } showEmptyHint();
 };
+// 摘要:整段记录一次发给模型;估算超过模型上下文的 40% 就按行切成几段,每段先写详细笔记,最后合并成摘要。
+// 估算偏保守,接口仍报上下文超长时把每段减半重来
+const CONTEXT = { "gpt-6.1-sol": 500000, "gpt-6-luna": 272000 };
+function estTokens(s) { const cjk = (s.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length; return Math.ceil(cjk * 1.1 + (s.length - cjk) / 3); }
+function splitByTokens(rows, budget) {
+  const out = []; let cur = [], n = 0;
+  for (const r of rows) { const k = estTokens(r) + 1; if (cur.length && n + k > budget) { out.push(cur); cur = []; n = 0; } cur.push(r); n += k; }
+  if (cur.length) out.push(cur);
+  return out;
+}
+async function recapCall(prompt) {
+  const res = await fetch(cfg.apiBase + "/chat/completions", {
+    method: "POST", headers: apiHeaders(),
+    body: JSON.stringify({ model: cfg.ctModel, reasoning_effort: "medium", messages: [{ role: "user", content: prompt }] }),
+  });
+  if (!res.ok) { const txt = await res.text(), err = new Error(res.status + " " + txt.slice(0, 200)); err.tooLong = res.status === 400 && /context|too long|maximum/i.test(txt); throw err; }
+  const rd = await res.json(); addMtCost(cfg.ctModel, rd.usage);
+  return rd.choices[0].message.content;
+}
+async function makeRecap(rows, onStep, budgetOverride = 0) {
+  const tgt = tgtName(cfg.tpl.target, "en"), ctx = glossaryForLLM();
+  const intro = `a live subtitle log of "${cfg.tpl.name}" (ASR + live correction; may still contain recognition errors)`;
+  const final = `Write in ${tgt}, plain text:\n1. Summary (about 300 words or 300 characters): what happened, segments, highlights and important announcements (events, merchandise, release dates — list dates exactly).\n2. Section by section: split by segment/topic, give each a short heading, and rewrite the content as clear, complete prose.\n3. Uncertain points: places where the ASR may have misheard or that cannot be determined.`;
+  let budget = budgetOverride || Math.floor((CONTEXT[cfg.ctModel] || 128000) * 0.4) - estTokens(ctx) - 2000;
+  for (let attempt = 0; ; attempt++) {
+    const parts = splitByTokens(rows, budgetOverride ? budget : Math.max(budget, 4000));
+    try {
+      if (parts.length === 1) return await recapCall(`Below is ${intro}. ${final}\n\nTemplate context:\n${ctx}\n\nLog (time | original | live translation):\n${rows.join("\n")}`);
+      const notes = [];
+      for (let i = 0; i < parts.length; i++) {
+        onStep(t("rec.recapPart", { i: i + 1, n: parts.length }));
+        notes.push(await recapCall(`Below is part ${i + 1} of ${parts.length} of ${intro}. Write detailed notes in ${tgt}, plain text, for a later merge into one summary: go through this part in order, split by segment/topic with the time range and a short heading, and rewrite what was said as clear prose. Keep every announcement, name, number and date exactly. End with a list of places where the ASR may have misheard.\n\nTemplate context:\n${ctx}\n\nLog (time | original | live translation):\n${parts[i].join("\n")}`));
+      }
+      onStep(t("rec.recapMerge", { n: parts.length }));
+      return await recapCall(`Below are notes on ${parts.length} consecutive parts of ${intro}, written part by part. Merge them into one result. ${final}\n\nTemplate context:\n${ctx}\n\n` + notes.map((x, i) => `=== Part ${i + 1} of ${parts.length} ===\n${x}`).join("\n\n"));
+    } catch (e) {
+      if (!e.tooLong || attempt >= 3) throw e;
+      budget = Math.floor(budget / 2);
+    }
+  }
+}
 $("#recap").onclick = async (e) => {
   applySettings();
-  const body = lines.filter((l) => l.src).map((l) => `${l.t.toTimeString().slice(0, 5)} | ${l.src} | ${l.tgt}`).join("\n");
-  if (!body) { $("#recapOut").textContent = t("rec.recapEmpty"); return; }
+  const rows = lines.filter((l) => l.src).map((l) => `${l.ms != null ? fmtClock(l.ms) : l.t.toTimeString().slice(0, 5)} | ${l.src} | ${l.tgt}`); // 文件会话用视频内时间
+  if (!rows.length) { $("#recapOut").textContent = t("rec.recapEmpty"); return; }
   e.target.disabled = true; $("#recapOut").textContent = t("rec.recapBusy");
-  const tgt = tgtName(cfg.tpl.target, "en");
-  try {
-    const res = await fetch(cfg.apiBase + "/chat/completions", {
-      method: "POST", headers: apiHeaders(),
-      body: JSON.stringify({ model: cfg.ctModel, reasoning_effort: "medium", messages: [{ role: "user", content:
-        `Below is a live subtitle log of "${cfg.tpl.name}" (ASR + live correction; may still contain recognition errors). Write in ${tgt}, plain text:\n1. Summary (about 300 words or 300 characters): what happened, segments, highlights and important announcements (events, merchandise, release dates — list dates exactly).\n2. Section by section: split by segment/topic, give each a short heading, and rewrite the content as clear, complete prose.\n3. Uncertain points: places where the ASR may have misheard or that cannot be determined.\n\nTemplate context:\n${glossaryForLLM()}\n\nLog (time | original | live translation):\n${body}` }] }),
-    });
-    if (!res.ok) throw new Error(res.status + " " + (await res.text()).slice(0, 200));
-    const rd = await res.json(); addMtCost(cfg.ctModel, rd.usage);
-    $("#recapOut").textContent = rd.choices[0].message.content;
-  } catch (err) { $("#recapOut").textContent = t("rec.recapFail") + err.message; }
+  try { $("#recapOut").textContent = await makeRecap(rows, (m) => ($("#recapOut").textContent = m)); }
+  catch (err) { $("#recapOut").textContent = t("rec.recapFail") + err.message; }
   e.target.disabled = false;
 };
 
@@ -1943,4 +1976,4 @@ show(["home", "tpl", "live", "create"].includes(store.get("view", "")) ? store.g
 // 收音中离开页面先确认(iOS 不一定弹,字幕反正已存本地)
 window.addEventListener("beforeunload", (e) => { if (running) { e.preventDefault(); e.returnValue = ""; } });
 // 给端到端测试用的观察口(模块作用域里的状态外面看不到)
-Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return spk; }, setPickFor: (v) => (pickFor = v), subtitleFile, fileConfig, sessionConfig } });
+Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return spk; }, setPickFor: (v) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
