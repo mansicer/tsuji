@@ -1,8 +1,24 @@
-# Tsuji
+<h1 align="center">Tsuji</h1>
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmansicer%2Ftsuji&project-name=tsuji&repository-name=tsuji) [![License](https://img.shields.io/github/license/mansicer/tsuji)](LICENSE)
+<p align="center"><b>Live bilingual subtitles in your browser</b></p>
 
-English | [简体中文](README.zh-CN.md)
+<p align="center">
+  <a href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmansicer%2Ftsuji&project-name=tsuji&repository-name=tsuji"><img src="https://vercel.com/button" alt="Deploy with Vercel"></a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mansicer/tsuji?color=blue" alt="License"></a>
+  <a href="https://github.com/mansicer/tsuji/commits/main"><img src="https://img.shields.io/github/last-commit/mansicer/tsuji" alt="Last commit"></a>
+  <a href="https://github.com/mansicer/tsuji/stargazers"><img src="https://img.shields.io/github/stars/mansicer/tsuji?style=flat" alt="Stars"></a>
+  <br>
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white" alt="Vite">
+  <img src="https://img.shields.io/badge/OpenAI-Realtime%20%2B%20GPT-412991?logo=openai&logoColor=white" alt="OpenAI Realtime + GPT">
+  <img src="https://img.shields.io/badge/ONNX%20Runtime-Web-005CED?logo=onnx&logoColor=white" alt="ONNX Runtime Web">
+  <img src="https://img.shields.io/badge/FFmpeg-wasm-007808?logo=ffmpeg&logoColor=white" alt="ffmpeg.wasm">
+</p>
+
+<p align="center">English · <a href="README.zh-CN.md">简体中文</a></p>
 
 **Live bilingual subtitles in your browser.** Open the page on your phone or laptop, start the microphone, and Tsuji turns continuous speech into line-by-line bilingual subtitles: OpenAI Realtime transcribes, then GPT corrects the transcript against your glossary and translates it.
 

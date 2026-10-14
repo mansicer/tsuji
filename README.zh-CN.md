@@ -1,8 +1,24 @@
-# Tsuji(通事) — 浏览器里的实时字幕翻译
+<h1 align="center">Tsuji(通事)</h1>
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmansicer%2Ftsuji&project-name=tsuji&repository-name=tsuji) [![License](https://img.shields.io/github/license/mansicer/tsuji)](LICENSE)
+<p align="center"><b>浏览器里的实时双语字幕翻译</b></p>
 
-[English](README.md) | 简体中文
+<p align="center">
+  <a href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmansicer%2Ftsuji&project-name=tsuji&repository-name=tsuji"><img src="https://vercel.com/button" alt="Deploy with Vercel"></a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mansicer/tsuji?color=blue" alt="License"></a>
+  <a href="https://github.com/mansicer/tsuji/commits/main"><img src="https://img.shields.io/github/last-commit/mansicer/tsuji" alt="Last commit"></a>
+  <a href="https://github.com/mansicer/tsuji/stargazers"><img src="https://img.shields.io/github/stars/mansicer/tsuji?style=flat" alt="Stars"></a>
+  <br>
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white" alt="Vite">
+  <img src="https://img.shields.io/badge/OpenAI-Realtime%20%2B%20GPT-412991?logo=openai&logoColor=white" alt="OpenAI Realtime + GPT">
+  <img src="https://img.shields.io/badge/ONNX%20Runtime-Web-005CED?logo=onnx&logoColor=white" alt="ONNX Runtime Web">
+  <img src="https://img.shields.io/badge/FFmpeg-wasm-007808?logo=ffmpeg&logoColor=white" alt="ffmpeg.wasm">
+</p>
+
+<p align="center"><a href="README.md">English</a> · 简体中文</p>
 
 手机或电脑浏览器直接开麦,连续收音 → OpenAI Realtime 语音识别 → GPT 按模板词表校正并翻译,一句一句出双语字幕。
 不用装 App,所有请求都从浏览器直接发给 OpenAI,API 密钥只保存在本机浏览器里。
