@@ -1578,7 +1578,7 @@ function download(name, text, type = "text/plain") {
 function exportTemplate(tp) {
   const { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, voices } = tp;
   download((name || "template").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60) + ".json",
-    JSON.stringify({ format: "live-subs-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, ...(voices ? { voices } : {}) } }, null, 2), "application/json");
+    JSON.stringify({ format: "tsuji-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, ...(voices ? { voices } : {}) } }, null, 2), "application/json");
 }
 $("#importTpl").onclick = () => $("#importFile").click();
 $("#importFile").onchange = async (e) => {

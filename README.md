@@ -1,4 +1,6 @@
-# live-subs — 浏览器里的实时字幕翻译
+# Tsuji(通事) — 浏览器里的实时字幕翻译
+
+> Live bilingual subtitles in your browser, powered by OpenAI Realtime + GPT.
 
 手机或电脑浏览器直接开麦,连续收音 → OpenAI Realtime 语音识别 → GPT 按模板词表校正并翻译,一句一句出双语字幕。
 不用装 App,所有请求都从浏览器直接发给 OpenAI,API 密钥只保存在本机浏览器里。
@@ -6,7 +8,7 @@
 - **模板**:节目或活动的背景说明、出演者和专有名词表、译文风格。同一份词表同时给识别(提示词 / 关键词)和翻译(按读音纠正听错的人名、统一译名)。可以和 GPT 对话、上传课件等资料新建模板,也可以导入导出。
 - **会话**:每次翻译是一个会话,单独保存语言、模型、收音和显示设置以及字幕记录,刷新或标签页被回收后自动恢复。
 - **文件翻译**:上传视频或音频,浏览器内用 ffmpeg.wasm 提取音轨后按 4 倍速识别翻译,播放器上同步叠加字幕,可导出 SRT / VTT。
-- **说话人**(实验功能,文件会话):浏览器本地用 CAM++ 声纹模型自动分组,起名后每句字幕标上说话人,不花 API。
+- **说话人**(实验功能,文件会话):浏览器本地用 CAM++ 声纹模型把声音分组,再由 GPT 结合字幕、模板里的出演者和说话人线索认出每组是谁,每句字幕标上说话人(每集约几美分 API 费用)。确认过的声音可以存进模板,下次自动认人。
 - 识别语言 / 目标语言:中、英、日、韩、法、德、西;界面中英文。
 
 ## 使用
@@ -24,7 +26,7 @@ npm test           # 单元测试
 npm run build      # 输出到 dist/
 ```
 
-代码结构:`index.html`(页面骨架)、`src/main.ts`(主程序)、`src/spk/core.ts`(说话人识别的纯计算部分:重采样、能量切分、Kaldi 兼容 fbank、聚类)、`src/config.ts`(默认模型、内置模板、部署配置)、`src/builtin/`(内置模板)。
+代码结构:`index.html`(页面骨架)、`src/main.ts`(主程序)、`src/spk/core.ts`(说话人识别的纯计算部分:重采样、能量切分、Kaldi 兼容 fbank、聚类、平滑)、`src/spk/judge.ts`(说话人的 GPT 判定)、`src/config.ts`(默认模型、内置模板、部署配置)、`src/builtin/`(内置模板)。
 
 大文件都和页面同源发布,不依赖外部 CDN:ffmpeg.wasm(32 MB)和 onnxruntime-web 的 wasm(14 MB)来自 npm 依赖,CAM++ 模型构建前由 `scripts/fetch-model.mjs` 下载并校验 sha256。三者都只在用到时才加载。
 
@@ -49,3 +51,7 @@ npm run deploy:selfhost                  # 只发布已提交的代码;大文件
 
 - 声纹模型:[3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++(`speech_campplus_sv_zh-cn_16k-common`),onnx 版本来自 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 - [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)、[onnxruntime-web](https://github.com/microsoft/onnxruntime)
+
+## 许可证
+
+[Apache-2.0](LICENSE)
