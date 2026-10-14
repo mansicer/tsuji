@@ -77,7 +77,7 @@ const I18N = {
     "live.empty": "点击下方“开始收音”。请将设备朝向声源，并保持屏幕常亮。", "live.emptyKey": "请先在“设置”中填写 OpenAI API 密钥，然后点击下方“开始收音”。",
     "line.translating": "正在翻译……", "line.noise": "未识别到有效语音", "line.failed": "翻译失败", "line.unfinished": "页面刷新前未完成翻译", "line.sep": "以上为之前的 {n} 条记录",
     "lat.stream": "流式", "ib.gain": "增益", "ib.asr": "识别", "ib.mt": "翻译", "ib.avg": "平均", "ib.queue": "待翻译", "ib.lines": "语句", "ib.noise": "杂音", "ib.err": "错误", "ib.cost": "累计费用", "ib.level": "输入音量", "ib.deltas": "已收到识别片段 {n} 个", "sec": "{s} 秒",
-    "cost": "预估累计费用：识别 {a}，翻译与模板 {m}，合计 {t}。按官方价格与实际用量估算，仅统计本设备，刷新页面后保留。",
+    "cost": "预估累计费用：识别 {a}，翻译与模板 {m}，合计 {t}。按官方价格与实际用量估算（服务器用 ChatGPT 订阅处理的请求不计入），仅统计本设备，刷新页面后保留。",
     "flash.mt": "翻译失败：", "flash.timeout": "请求超时", "flash.asr": "识别出错：", "flash.mic": "无法打开麦克风：", "flash.https": "需通过 HTTPS 访问本页面才能使用麦克风。",
     "create.titleNew": "新建模板", "create.titleEdit": "编辑模板", "create.tabChat": "对话", "create.tabDraft": "模板草稿 · {n} 条",
     "create.placeholder": "请描述翻译场合，例如活动、课程或会议名称、日期、出演者或讲师、官方网站链接，以及容易听错的词语。",
@@ -161,7 +161,7 @@ const I18N = {
     "live.empty": "Tap “Start listening” below. Point the device toward the sound source and keep the screen on.", "live.emptyKey": "Add an OpenAI API key in Settings, then tap “Start listening” below.",
     "line.translating": "Translating…", "line.noise": "No speech detected", "line.failed": "Translation failed", "line.unfinished": "Not translated before the page was reloaded", "line.sep": "{n} earlier lines above",
     "lat.stream": "streaming", "ib.gain": "Gain", "ib.asr": "ASR", "ib.mt": "Translation", "ib.avg": "Avg", "ib.queue": "Queued", "ib.lines": "Lines", "ib.noise": "Noise", "ib.err": "Errors", "ib.cost": "Spend", "ib.level": "Input level", "ib.deltas": "{n} recognition segments received", "sec": "{s}s",
-    "cost": "Estimated spend: recognition {a}, translation and templates {m}, total {t}. Based on list prices and actual usage for this device only; kept across reloads.",
+    "cost": "Estimated spend: recognition {a}, translation and templates {m}, total {t}. Based on list prices and actual usage (requests the server sends through a ChatGPT subscription are not counted), for this device only; kept across reloads.",
     "flash.mt": "Translation failed: ", "flash.timeout": "request timed out", "flash.asr": "Recognition error: ", "flash.mic": "Unable to open the microphone: ", "flash.https": "This page must be served over HTTPS to use the microphone.",
     "create.titleNew": "New template", "create.titleEdit": "Edit template", "create.tabChat": "Chat", "create.tabDraft": "Draft · {n} entries",
     "create.placeholder": "Describe the occasion: the event, course or meeting name, date, speakers or lecturers, official links, and words likely to be misheard.",
@@ -715,7 +715,7 @@ function addAsrCost(seconds, model = cfg.asrModel) {
 }
 // 兼容 Chat Completions(prompt_tokens)和 Responses(input_tokens)两种 usage
 function addMtCost(model, u, extra = 0) {
-  if (!u) return;
+  if (!u || u.billed_to === "chatgpt_subscription") return; // 服务器转发到 ChatGPT 订阅的请求不另计费
   const [pin, pcache, pout] = MT_PRICE[model] || MT_PRICE["gpt-6-sol"];
   const input = u.prompt_tokens ?? u.input_tokens ?? 0, output = u.completion_tokens ?? u.output_tokens ?? 0;
   const cached = (u.prompt_tokens_details || u.input_tokens_details || {}).cached_tokens || 0;
