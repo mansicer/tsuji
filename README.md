@@ -1,57 +1,78 @@
-# Tsuji(通事) — 浏览器里的实时字幕翻译
+# Tsuji
 
-> Live bilingual subtitles in your browser, powered by OpenAI Realtime + GPT.
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmansicer%2Ftsuji&project-name=tsuji&repository-name=tsuji) [![License](https://img.shields.io/github/license/mansicer/tsuji)](LICENSE)
 
-手机或电脑浏览器直接开麦,连续收音 → OpenAI Realtime 语音识别 → GPT 按模板词表校正并翻译,一句一句出双语字幕。
-不用装 App,所有请求都从浏览器直接发给 OpenAI,API 密钥只保存在本机浏览器里。
+English | [简体中文](README.zh-CN.md)
 
-- **模板**:节目或活动的背景说明、出演者和专有名词表、译文风格。同一份词表同时给识别(提示词 / 关键词)和翻译(按读音纠正听错的人名、统一译名)。可以和 GPT 对话、上传课件等资料新建模板,也可以导入导出。
-- **会话**:每次翻译是一个会话,单独保存语言、模型、收音和显示设置以及字幕记录,刷新或标签页被回收后自动恢复。
-- **文件翻译**:上传视频或音频,浏览器内用 ffmpeg.wasm 提取音轨后按 4 倍速识别翻译,播放器上同步叠加字幕,可导出 SRT / VTT。
-- **说话人**(实验功能,文件会话):浏览器本地用 CAM++ 声纹模型把声音分组,再由 GPT 结合字幕、模板里的出演者和说话人线索认出每组是谁,每句字幕标上说话人(每集约几美分 API 费用)。确认过的声音可以存进模板,下次自动认人。
-- 识别语言 / 目标语言:中、英、日、韩、法、德、西;界面中英文。
+**Live bilingual subtitles in your browser.** Open the page on your phone or laptop, start the microphone, and Tsuji turns continuous speech into line-by-line bilingual subtitles: OpenAI Realtime transcribes, then GPT corrects the transcript against your glossary and translates it.
 
-## 使用
+No app to install. Every request goes straight from the browser to OpenAI, and your API key stays in your browser's local storage.
 
-打开部署好的页面 →「设置」里填 OpenAI API 密钥 → 新建会话 →「开始收音」。手机浏览器只在 HTTPS 下给麦克风权限。
+*Tsuji (通事) were the official interpreters of Edo-period Japan.*
 
-现场注意:屏幕保持常亮、不要切到别的 App(iOS 切后台会停麦),手机朝向音箱。另外请先确认会场规定,很多活动禁止录音录像。
+## Features
 
-## 开发
+- **Templates**: background notes, people and terminology glossary, and translation style for a show or event. The same glossary feeds both recognition (prompt / keywords) and translation (fixing misheard names by their reading, keeping translations consistent). Create one by chatting with GPT and uploading material such as slides, or import / export them as JSON.
+- **Sessions**: each translation is a session with its own languages, models, audio and display settings, and subtitle history. Sessions survive page reloads and discarded tabs.
+- **File translation**: upload a video or audio file. The audio track is extracted in the browser with ffmpeg.wasm and processed at 4× speed. Subtitles are overlaid on the player in sync and can be exported as SRT / VTT.
+- **Speaker identification** (experimental, file sessions): a CAM++ speaker-embedding model runs locally in the browser to group voices, then GPT works out who each group is from the subtitles and the template's people and speaker cues. Each line is tagged with its speaker, at a cost of a few cents per episode. Confirmed voices can be saved into the template so people are recognized automatically next time.
+- Languages: Chinese, English, Japanese, Korean, French, German and Spanish for both source and target. The interface is available in Chinese and English.
+
+## Usage
+
+Open the deployed page → enter your OpenAI API key in **Settings** → create a session → **Start**. Mobile browsers only grant microphone access over HTTPS.
+
+At live events: keep the screen on, don't switch to another app (iOS stops the microphone in the background), and point the phone toward the speakers. Check the venue rules first, since many events prohibit recording.
+
+### Built-in templates
+
+- **MyGO!!!!!の迷子集会**: BanG Dream! MyGO!!!!! radio show (characters, voice actors, songs, speaker cues)
+- **EXTEND STEP HOOOOPE! 番組イベント2026**: live event of a rookie voice-actor radio show by Bunka Hoso Extend
+
+## Development
 
 ```bash
 npm install
-npm run dev        # 本地开发(首次会下载 28 MB 的声纹模型到 public/models/)
-npm test           # 单元测试
-npm run build      # 输出到 dist/
+npm run dev        # dev server (the first run downloads the 28 MB speaker model to public/models/)
+npm test           # unit tests
+npm run build      # output in dist/
 ```
 
-代码结构:`index.html`(页面骨架)、`src/main.ts`(主程序)、`src/spk/core.ts`(说话人识别的纯计算部分:重采样、能量切分、Kaldi 兼容 fbank、聚类、平滑)、`src/spk/judge.ts`(说话人的 GPT 判定)、`src/config.ts`(默认模型、内置模板、部署配置)、`src/builtin/`(内置模板)。
+Code layout:
 
-大文件都和页面同源发布,不依赖外部 CDN:ffmpeg.wasm(32 MB)和 onnxruntime-web 的 wasm(14 MB)来自 npm 依赖,CAM++ 模型构建前由 `scripts/fetch-model.mjs` 下载并校验 sha256。三者都只在用到时才加载。
+| Path | Contents |
+|---|---|
+| `index.html` | Page skeleton |
+| `src/main.ts` | Main application |
+| `src/spk/core.ts` | Speaker identification math: resampling, energy-based segmentation, Kaldi-compatible fbank, clustering, smoothing |
+| `src/spk/judge.ts` | GPT speaker judgment |
+| `src/config.ts` | Default models, built-in templates, deployment config |
+| `src/builtin/` | Built-in templates |
 
-## 部署
+All large assets are served from the same origin with no external CDN: ffmpeg.wasm (32 MB) and the onnxruntime-web wasm (14 MB) come from npm dependencies, and the CAM++ model is downloaded and sha256-verified by `scripts/fetch-model.mjs` before the build. Each is loaded only when needed.
 
-### Vercel(或任意静态托管)
+## Deployment
 
-纯静态站点:构建命令 `npm run build`,输出目录 `dist`。仓库里的 `vercel.json` 已写好,导入 Vercel 即可。
+### Vercel (or any static host)
 
-### 自托管 + 服务器代填密钥(可选)
+Tsuji is a static site: build command `npm run build`, output directory `dist`. The included `vercel.json` is ready to use: click **Deploy with Vercel** above, or import the repository on Vercel. No environment variables are needed.
 
-想让用户不填密钥也能用,可以在自己的服务器上把同站路径(例如 `/openai/v1`)反代到 `api.openai.com` 并加上 `Authorization` 头,前面挡一层登录,然后:
+### Self-hosted with a server-side key (optional)
+
+To let users skip entering a key, reverse-proxy a same-site path (for example `/openai/v1`) to `api.openai.com` on your own server, add the `Authorization` header there, and put a login in front of it. Then:
 
 ```bash
-cp .env.selfhost.example .env.selfhost   # 填 VITE_SERVER_API、DEPLOY_HOST、DEPLOY_DIR
-npm run deploy:selfhost                  # 只发布已提交的代码;大文件预压缩 .gz,整体替换上线
+cp .env.selfhost.example .env.selfhost   # fill in VITE_SERVER_API, VITE_BASE, DEPLOY_HOST, DEPLOY_DIR
+npm run deploy:selfhost                  # deploys committed code only; pre-compresses large files and swaps the whole directory
 ```
 
-需要放行的接口:`/realtime`(WebSocket)、`/chat/completions`、`/responses`。用户在设置里填了自己的密钥时仍然直连 OpenAI。
+Endpoints the proxy must allow: `/realtime` (WebSocket), `/chat/completions` and `/responses`. Users who enter their own key in Settings still connect to OpenAI directly.
 
-## 致谢
+## Acknowledgements
 
-- 声纹模型:[3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++(`speech_campplus_sv_zh-cn_16k-common`),onnx 版本来自 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
-- [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)、[onnxruntime-web](https://github.com/microsoft/onnxruntime)
+- Speaker model: [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++ (`speech_campplus_sv_zh-cn_16k-common`), ONNX export from [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+- [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), [onnxruntime-web](https://github.com/microsoft/onnxruntime)
 
-## 许可证
+## License
 
 [Apache-2.0](LICENSE)
