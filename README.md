@@ -64,6 +64,10 @@ Code layout:
 | `src/main.ts` | Main application |
 | `src/spk/core.ts` | Speaker identification math: resampling, energy-based segmentation, Kaldi-compatible fbank, clustering, smoothing |
 | `src/spk/judge.ts` | GPT speaker judgment |
+| `src/memo.ts` | Translation memory notes |
+| `src/glossary.ts` | Glossary text format ↔ entries |
+| `src/subtitle.ts` | Timestamps and SRT / VTT export |
+| `src/tokens.ts` | Token estimates and splitting long logs for summaries |
 | `src/config.ts` | Default models, built-in templates, deployment config |
 | `src/builtin/` | Built-in templates |
 

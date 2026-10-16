@@ -6,6 +6,9 @@ import ffmpegWasm from "@ffmpeg/core/wasm?url";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
 import { applyMemo, memoPrompt, MEMO_SCHEMA } from "./memo";
+import { parseGlossary, glossaryText } from "./glossary";
+import { fmtClock, subtitleFile } from "./subtitle";
+import { estTokens, splitByTokens } from "./tokens";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 
@@ -273,22 +276,6 @@ function removeTemplate(id) {
   if (cfg.tpl && cfg.tpl.id === id) refreshTemplate();
 }
 function newId() { return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-function parseGlossary(text) {
-  const people = [], terms = [];
-  for (let line of (text || "").split("\n")) {
-    line = line.trim();
-    if (!line || line.startsWith("#")) continue;
-    const person = line.startsWith("@");
-    const [src, reading = "", tgt = "", notes = ""] = line.replace(/^@/, "").split("|").map((s) => s.trim());
-    if (src) (person ? people : terms).push({ src, reading, tgt, notes });
-  }
-  return { people, terms };
-}
-function glossaryText(people, terms) {
-  const row = (e, at) => (at ? "@" : "") + [e.src || e.text || "", e.reading || "", e.tgt || e.translation || "", e.notes || ""].join(" | ").replace(/( \| )+$/, "");
-  return [...people.map((e) => row(e, true)), ...(people.length && terms.length ? [""] : []), ...terms.map((e) => row(e, false))].join("\n");
-}
-
 const cfg = {};
 // 收音参数默认值(和设置面板的控件 id 一一对应);和默认值相同就不落盘,以后改默认值设备会跟着变
 const AUDIO_DEFAULTS = { gain: "auto", maxGain: 40, agcTarget: 14, vad: VAD, silence: 600, prefix: 300, maxTurn: 8, nr: "off", micAgc: true, micNs: false, micEc: false };
@@ -965,7 +952,6 @@ $("#newSession").onclick = () => show("tpl");
 const FILE_SPEED = 4, MEDIA_BASE = new Date(2000, 0, 1).getTime();
 const fileJob = { active: false, phase: "idle", sid: null, pcm: null, pos: 0, total: 0, t0: 0, from: 0, ws: null, items: {}, pending: 0, lastEnd: 0, speakFrom: null, lastEvt: 0, err: "", extractPct: 0 };
 function isFileSess() { return !!(curSess && curSess.kind === "file"); }
-function fmtClock(ms) { const s = Math.max(0, Math.round(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); }
 function setLineTime(line, s, e) {
   line.ms = s; line.endMs = e; line.t = new Date(MEDIA_BASE + e);
   if (!line.el.querySelector(".tm")) line.el.prepend(el("div", { className: "tm", textContent: fmtClock(s) }));
@@ -1217,15 +1203,9 @@ function fileProgress() {
   $("#expSrt").hidden = $("#expVtt").hidden = !lines.some((l) => l.ms != null && l.done);
   setGoFile();
 }
-// 字幕文件:译文在上、原文在下(设置里关掉「显示原文」就只导出译文)
-function subtitleFile(kind) {
-  const ts = (ms) => { const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s2 = Math.floor(ms / 1000) % 60, x = Math.floor(ms % 1000); return [h, m, s2].map((v) => String(v).padStart(2, "0")).join(":") + (kind === "srt" ? "," : ".") + String(x).padStart(3, "0"); };
-  const withSrc = $("#showSrc").checked;
-  const cues = lines.filter((l) => l.ms != null && (l.tgt || l.src)).map((l, i) => `${i + 1}\n${ts(l.ms)} --> ${ts(Math.max(l.endMs, l.ms + 800))}\n${spkPrefix(l)}${l.tgt || l.src}${withSrc && l.tgt && l.src ? "\n" + l.src : ""}\n`);
-  return (kind === "vtt" ? "WEBVTT\n\n" : "") + cues.join("\n");
-}
-$("#expSrt").onclick = () => download(fileName(curSess.name) + ".srt", subtitleFile("srt"), "application/x-subrip");
-$("#expVtt").onclick = () => download(fileName(curSess.name) + ".vtt", subtitleFile("vtt"), "text/vtt");
+const makeSubs = (kind) => subtitleFile(kind, lines, $("#showSrc").checked, spkPrefix);
+$("#expSrt").onclick = () => download(fileName(curSess.name) + ".srt", makeSubs("srt"), "application/x-subrip");
+$("#expVtt").onclick = () => download(fileName(curSess.name) + ".vtt", makeSubs("vtt"), "text/vtt");
 
 
 // ---------- 说话人识别(实验功能,全部在本机计算,不调用 API) ----------
@@ -1914,13 +1894,6 @@ $("#clearAll").onclick = (e) => {
 // 摘要:整段记录一次发给模型;估算超过模型上下文的 40% 就按行切成几段,每段先写详细笔记,最后合并成摘要。
 // 估算偏保守,接口仍报上下文超长时把每段减半重来
 const CONTEXT = { "gpt-6.1-sol": 500000, "gpt-6-luna": 272000 };
-function estTokens(s) { const cjk = (s.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length; return Math.ceil(cjk * 1.1 + (s.length - cjk) / 3); }
-function splitByTokens(rows, budget) {
-  const out = []; let cur = [], n = 0;
-  for (const r of rows) { const k = estTokens(r) + 1; if (cur.length && n + k > budget) { out.push(cur); cur = []; n = 0; } cur.push(r); n += k; }
-  if (cur.length) out.push(cur);
-  return out;
-}
 async function recapCall(prompt) {
   const res = await fetch(cfg.apiBase + "/chat/completions", {
     method: "POST", headers: apiHeaders(),
