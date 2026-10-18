@@ -9,7 +9,7 @@ import { applyMemo, memoPrompt, MEMO_SCHEMA } from "./memo";
 import { parseGlossary, glossaryText } from "./glossary";
 import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
-import { LineStore, patchTranslations } from "./linestore";
+import { LineStore, patchTranslations, mergeLegacy } from "./linestore";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 
@@ -20,10 +20,13 @@ const store = {
   set(k, v) { try { v === null ? localStorage.removeItem("jls." + k) : localStorage.setItem("jls." + k, v); } catch (e) { if (v !== null) storageFailed(e); } },
   json(k, d) { try { return JSON.parse(this.get(k, "null")) ?? d; } catch { return d; } },
 };
-// 存储写满(或被浏览器禁用)时提示,一分钟最多一次;字幕还在页面上,删掉旧会话腾出空间后会继续保存
-let storageWarnAt = 0;
+// 存储写满时提示(一分钟最多一次;字幕还在页面上,删掉旧会话腾出空间后会继续保存);
+// 存储被浏览器禁用时只提示一次,删会话也没用
+let storageWarnAt = 0, storageOffWarned = false;
+function isQuotaError(e) { return !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014); }
 function storageFailed(e) {
   console.error(e);
+  if (!isQuotaError(e)) { if (!storageOffWarned) { storageOffWarned = true; flash(t("flash.storageOff")); } return; }
   if (Date.now() - storageWarnAt < 60000) return;
   storageWarnAt = Date.now(); flash(t("flash.storage"));
 }
@@ -89,7 +92,7 @@ const I18N = {
     "line.translating": "正在翻译……", "line.noise": "未识别到有效语音", "line.failed": "翻译失败", "line.unfinished": "页面刷新前未完成翻译", "line.sep": "以上为之前的 {n} 条记录",
     "lat.stream": "流式", "ib.gain": "增益", "ib.asr": "识别", "ib.mt": "翻译", "ib.avg": "平均", "ib.queue": "待翻译", "ib.lines": "语句", "ib.noise": "杂音", "ib.err": "错误", "ib.cost": "累计费用", "ib.level": "输入音量", "ib.deltas": "已收到识别片段 {n} 个", "sec": "{s} 秒",
     "cost": "预估累计费用：识别 {a}，翻译与模板 {m}，合计 {t}。按官方价格与实际用量估算（服务器用 ChatGPT 订阅处理的请求不计入），仅统计本设备，刷新页面后保留。",
-    "flash.storage": "浏览器存储已满,字幕记录没能保存。请在会话列表里删掉不需要的旧会话。", "flash.mt": "翻译失败：", "flash.timeout": "请求超时", "flash.asr": "识别出错：", "flash.mic": "无法打开麦克风：", "flash.https": "需通过 HTTPS 访问本页面才能使用麦克风。",
+    "flash.storage": "浏览器存储已满，字幕记录没能保存。请在会话列表里删掉不需要的旧会话。", "flash.storageOff": "浏览器禁用了本地存储，字幕记录不会保存，刷新页面后会丢失。", "flash.mt": "翻译失败：", "flash.timeout": "请求超时", "flash.asr": "识别出错：", "flash.mic": "无法打开麦克风：", "flash.https": "需通过 HTTPS 访问本页面才能使用麦克风。",
     "create.titleNew": "新建模板", "create.titleEdit": "编辑模板", "create.tabChat": "对话", "create.tabDraft": "模板草稿 · {n} 条",
     "create.placeholder": "请描述翻译场合，例如活动、课程或会议名称、日期、出演者或讲师、官方网站链接，以及容易听错的词语。",
     "create.send": "发送", "create.attach": "附件", "create.attachRemove": "移除", "create.attachTooBig": "附件总大小不能超过 {m} MB。", "create.attachRead": "无法读取文件：{name}", "create.attachOnly": "请阅读附件，并据此完善模板。", "create.thinking": "{st}，已用时 {s} 秒", "create.stStart": "正在分析需求", "create.stSearch": "正在联网检索，第 {n} 次", "create.stSearched": "已检索：{q}", "create.stWriting": "正在撰写回复", "create.stDraft": "正在生成模板，已整理 {n} 个条目", "create.err": "出错：{m}",
@@ -173,7 +176,7 @@ const I18N = {
     "line.translating": "Translating…", "line.noise": "No speech detected", "line.failed": "Translation failed", "line.unfinished": "Not translated before the page was reloaded", "line.sep": "{n} earlier lines above",
     "lat.stream": "streaming", "ib.gain": "Gain", "ib.asr": "ASR", "ib.mt": "Translation", "ib.avg": "Avg", "ib.queue": "Queued", "ib.lines": "Lines", "ib.noise": "Noise", "ib.err": "Errors", "ib.cost": "Spend", "ib.level": "Input level", "ib.deltas": "{n} recognition segments received", "sec": "{s}s",
     "cost": "Estimated spend: recognition {a}, translation and templates {m}, total {t}. Based on list prices and actual usage (requests the server sends through a ChatGPT subscription are not counted), for this device only; kept across reloads.",
-    "flash.storage": "Browser storage is full, so subtitles could not be saved. Delete old sessions you no longer need.", "flash.mt": "Translation failed: ", "flash.timeout": "request timed out", "flash.asr": "Recognition error: ", "flash.mic": "Unable to open the microphone: ", "flash.https": "This page must be served over HTTPS to use the microphone.",
+    "flash.storage": "Browser storage is full, so subtitles could not be saved. Delete old sessions you no longer need.", "flash.storageOff": "Browser storage is disabled, so subtitles are not saved and will be lost when the page reloads.", "flash.mt": "Translation failed: ", "flash.timeout": "request timed out", "flash.asr": "Recognition error: ", "flash.mic": "Unable to open the microphone: ", "flash.https": "This page must be served over HTTPS to use the microphone.",
     "create.titleNew": "New template", "create.titleEdit": "Edit template", "create.tabChat": "Chat", "create.tabDraft": "Draft · {n} entries",
     "create.placeholder": "Describe the occasion: the event, course or meeting name, date, speakers or lecturers, official links, and words likely to be misheard.",
     "create.send": "Send", "create.attach": "Attach", "create.attachRemove": "Remove", "create.attachTooBig": "Attachments cannot exceed {m} MB in total.", "create.attachRead": "Unable to read file: {name}", "create.attachOnly": "Please read the attachments and refine the template accordingly.", "create.thinking": "{st}, {s}s elapsed", "create.stStart": "Analyzing the request", "create.stSearch": "Searching the web, query {n}", "create.stSearched": "Searched: {q}", "create.stWriting": "Writing the reply", "create.stDraft": "Building the template, {n} entries so far", "create.err": "Error: {m}",
@@ -337,6 +340,7 @@ function refreshTemplate() {
   if (view === "live" && curSess) $("#title").textContent = curSess.name;
 }
 function deleteSession(id) {
+  bumpGen(id);
   sessions = sessions.filter((x) => x.id !== id); saveSessions(); lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
   if (curSess && curSess.id === id) useSession(sessions.length ? [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
 }
@@ -466,6 +470,11 @@ SCHEMA.required.push("memory");
 const lines = [];          // {id, raw, src, tgt, t, el}
 let follow = true;
 function sessKey(ss = curSess) { return ss ? ss.id : "none"; }
+// 会话的字幕被清空、重新处理或删除时加一。在途的翻译、防抖中的保存发现代数变了就丢弃,
+// 免得旧结果按 id 写到新行上(重新处理会从 id 1 重新编号),或者把已删会话的数据写回存储
+const linesGen = new Map();
+function curGen(key) { return linesGen.get(key) || 0; }
+function bumpGen(key) { linesGen.set(key, curGen(key) + 1); }
 // 翻译记忆(见 memo.ts):按会话存,随字幕一起清空
 let memo = [];
 function loadMemo() { memo = curSess ? store.json("smemo." + curSess.id, []) : []; renderMemo(); }
@@ -498,10 +507,11 @@ function addLine(id, raw) {
 let saveLinesTimer = null, pendingSave = null;
 function saveLines() {
   clearTimeout(saveLinesTimer);
-  const ss = curSess;
+  const ss = curSess, key = sessKey(ss), gen = curGen(key);
   pendingSave = () => {
     pendingSave = null;
-    lineStore.set(sessKey(ss), lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}) })));
+    if (curGen(key) !== gen) return;
+    lineStore.set(key, lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}) })));
     if (ss) { ss.count = lines.length; ss.updatedAt = Date.now(); saveSessions(); }
   };
   saveLinesTimer = setTimeout(pendingSave, 500);
@@ -581,7 +591,7 @@ async function pumpTranslate() {
   if (translating || !queue.length) return;
   translating = true;
   const batch = queue.splice(0, 6);
-  const tplId = cfg.tpl.id, ss = curSess;
+  const tplId = cfg.tpl.id, ss = curSess, key = sessKey(ss), gen = curGen(key);
   try {
     const ctx = history.slice(-8).map((l) => `${l.src} → ${l.tgt}`).join("\n") || "(none)";
     const user = `Running notes:\n${memoPrompt(memo)}\n\nRecent context (already translated, reference only):\n${ctx}\n\nNew ASR segments:\n` + JSON.stringify(batch.map((l) => ({ id: l.id, asr: l.raw })));
@@ -604,11 +614,12 @@ async function pumpTranslate() {
     lat.mt = performance.now() - mtStart; mtHist.push(lat.mt); if (mtHist.length > 10) mtHist.shift();
     lat.mtAvg = mtHist.reduce((a, b) => a + b, 0) / mtHist.length; showLat();
     const out = JSON.parse(data.choices[0].message.content), items = out.items || [];
+    if (curGen(key) !== gen) return; // 翻译途中这个会话被清空、重新处理或删除了
     if (ss !== curSess || !lines.includes(batch[0])) { // 翻译途中切走了会话:结果写回原会话,别混进当前会话的上下文
       if (ss) setMemo(applyMemo(getMemo(ss), out.memory), ss);
-      if (ss !== curSess) { lineStore.set(sessKey(ss), patchTranslations(lineStore.get(sessKey(ss)), items)); return; }
+      if (ss !== curSess) { lineStore.set(key, patchTranslations(lineStore.get(key), items)); return; }
       const byId = new Map(items.map((it) => [it.id, it])); // 又切回来了:页面上的行是从存储重建的,按 id 对上
-      for (const l of lines) { const it = byId.get(l.id); if (it) { l.src = it.src.trim(); l.tgt = it.tgt.trim(); renderLine(l); } }
+      for (const l of lines) { const it = byId.get(l.id); if (it) { l.src = it.src.trim(); l.tgt = it.tgt.trim(); renderLine(l); if (l.src) history.push(l); } }
       return;
     }
     if (cfg.tpl.id !== tplId) return; // 翻译途中换了模板,这批行已经不在页面上
@@ -623,7 +634,7 @@ async function pumpTranslate() {
   } catch (e) {
     console.error(e);
     flash(t("flash.mt") + (e.name === "AbortError" ? t("flash.timeout") : e.message)); diag.err++;
-    if (ss === curSess && cfg.tpl.id === tplId) for (const l of batch) { l.tgt = ""; l.failed = true; renderLine(l); }
+    if (ss === curSess && curGen(key) === gen && cfg.tpl.id === tplId) for (const l of batch) { l.tgt = ""; l.failed = true; renderLine(l); }
   } finally {
     translating = false;
     pumpTranslate();
@@ -1006,18 +1017,34 @@ const lsKV = {
   async put(k, v) { localStorage.setItem("jls." + k, JSON.stringify(v)); },
   async del(k) { localStorage.removeItem("jls." + k); },
 };
-let lineStore = new LineStore(idb, storageFailed);
+// 两种存储都被禁用(例如 Safari「阻止所有 Cookie」):不持久化,页面照常能用
+const noKV = {
+  async entries() { return []; },
+  async put() { throw new DOMException("storage unavailable", "SecurityError"); },
+  async del() {},
+};
+let lineStore = new LineStore(noKV, storageFailed);
 async function loadLineStore() {
-  try { await lineStore.load(); }
-  catch (e) { console.warn("IndexedDB unavailable, saving subtitles to localStorage", e); lineStore = new LineStore(lsKV, storageFailed); await lineStore.load(); }
-  // 旧版存在 localStorage 的 slines.<id>:写进新存储成功后再删,腾出空间
-  let keys = [];
-  try { keys = Object.keys(localStorage).filter((k) => k.startsWith("jls.slines.")); } catch {}
-  for (const k of keys) {
-    const id = k.slice("jls.slines.".length);
-    let arr = null; try { arr = JSON.parse(localStorage.getItem(k)); } catch {}
-    if (lineStore.has(id) || !Array.isArray(arr) || await lineStore.set(id, arr)) localStorage.removeItem(k);
+  for (const [kv, name] of [[idb, "IndexedDB"], [lsKV, "localStorage"]]) {
+    const st = new LineStore(kv, storageFailed);
+    try { await st.load(); lineStore = st; break; } catch (e) { console.warn(name + " unavailable for subtitles", e); }
   }
+  // 旧版存在 localStorage 的 slines.<id>:合并进新存储,写成功后再删,腾出空间。
+  // 迁移后又用旧版记过字幕的话,两边都有,旧版那部分接在后面
+  try {
+    let changed = false;
+    for (const k of Object.keys(localStorage).filter((k) => k.startsWith("jls.slines."))) {
+      const id = k.slice("jls.slines.".length);
+      let arr = null; try { arr = JSON.parse(localStorage.getItem(k)); } catch {}
+      const cur = lineStore.get(id), merged = Array.isArray(arr) ? mergeLegacy(cur, arr) : cur;
+      if (merged.length !== cur.length) {
+        if (!(await lineStore.set(id, merged))) continue;
+        const ss = sessions.find((x) => x.id === id); if (ss) { ss.count = merged.length; changed = true; }
+      }
+      localStorage.removeItem(k);
+    }
+    if (changed) saveSessions();
+  } catch (e) { console.warn("legacy subtitle migration skipped", e); }
 }
 let mediaBlob = null, mediaUrl = null, pickFor = null;
 // 先直接存 File;Safari 无痕模式等不让存 Blob 时,300 MB 以内改存 ArrayBuffer
@@ -1128,7 +1155,7 @@ async function fileStart() {
   }
   delete $("#go").dataset.armed;
   if (ss.done) { // 重新处理:清空字幕从头来
-    cancelSave(); lines.length = 0; history.length = 0; queue.length = 0; nextId = 0;
+    cancelSave(); bumpGen(sessKey()); lines.length = 0; history.length = 0; queue.length = 0; nextId = 0;
     $("#log").replaceChildren(); lineStore.set(sessKey(), null); ss.progress = 0; ss.done = false; ss.count = 0; saveSessions(); setMemo([]);
   }
   fileJob.active = true; fileJob.err = ""; setGoFile(); setStatus("status.processing", "on"); keepAwake();
@@ -1943,7 +1970,7 @@ let clearArmed = false;
 $("#clearAll").onclick = (e) => {
   if (!clearArmed) { clearArmed = true; e.target.textContent = t("rec.clearSure"); setTimeout(() => { clearArmed = false; e.target.textContent = t("rec.clear"); }, 3000); return; }
   lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; e.target.textContent = t("rec.clear"); setMemo([]);
-  cancelSave(); lineStore.set(sessKey(), null); if (curSess) { curSess.count = 0; saveSessions(); } showEmptyHint();
+  cancelSave(); bumpGen(sessKey()); lineStore.set(sessKey(), null); if (curSess) { curSess.count = 0; saveSessions(); } showEmptyHint();
 };
 // 摘要:整段记录一次发给模型;估算超过模型上下文的 40% 就按行切成几段,每段先写详细笔记,最后合并成摘要。
 // 估算偏保守,接口仍报上下文超长时把每段减半重来

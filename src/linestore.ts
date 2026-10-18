@@ -22,11 +22,12 @@ export class LineStore {
   }
 
   has(id: string): boolean { return this.cache.has(id); }
-  get(id: string): SavedLine[] { return this.cache.get(id) || []; }
+  /** 返回副本:调用方改数组不会让缓存和后端悄悄分叉 */
+  get(id: string): SavedLine[] { return [...(this.cache.get(id) || [])]; }
 
   /** 空数组或 null 表示删除。缓存立即更新;返回后端是否写成功 */
   set(id: string, lines: SavedLine[] | null): Promise<boolean> {
-    const write = lines && lines.length ? (this.cache.set(id, lines), this.kv.put(PREFIX + id, lines)) : (this.cache.delete(id), this.kv.del(PREFIX + id));
+    const write = lines && lines.length ? (this.cache.set(id, [...lines]), this.kv.put(PREFIX + id, lines)) : (this.cache.delete(id), this.kv.del(PREFIX + id));
     return write.then(() => true, (e) => (this.onError(e), false));
   }
 }
@@ -38,4 +39,17 @@ export function patchTranslations(saved: SavedLine[], items: { id: number; src: 
     const it = byId.get(l.id);
     return it ? { ...l, src: it.src.trim(), tgt: it.tgt.trim(), done: true } : l;
   });
+}
+
+/**
+ * 迁移后又用旧版记的字幕(旧版只认 localStorage):接在现有记录后面。
+ * 旧版那边从 id 1 重新编号,所以 id 顺延;同一行(时间和原文都相同)已经有了就跳过
+ */
+export function mergeLegacy(current: SavedLine[], legacy: SavedLine[]): SavedLine[] {
+  if (!current.length) return legacy;
+  const key = (l: SavedLine) => `${l.t}|${l.raw}`;
+  const seen = new Set(current.map(key));
+  let next = current.reduce((m, l) => Math.max(m, l.id || 0), 0);
+  const added = legacy.filter((l) => !seen.has(key(l))).map((l) => ({ ...l, id: ++next }));
+  return added.length ? [...current, ...added] : current;
 }

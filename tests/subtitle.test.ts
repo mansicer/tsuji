@@ -33,3 +33,9 @@ describe("subtitleFile", () => {
     expect(out).toContain("灯：你好");
   });
 });
+
+describe("subtitleFile without endMs", () => {
+  it("falls back to the 800 ms minimum instead of producing NaN", () => {
+    expect(subtitleFile("srt", [{ ms: 1000, src: "a" }], false)).toBe("1\n00:00:01,000 --> 00:00:01,800\na\n");
+  });
+});

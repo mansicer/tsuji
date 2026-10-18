@@ -18,6 +18,6 @@ export function subtitleFile(kind: "srt" | "vtt", lines: SubtitleLine[], withSrc
     const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s2 = Math.floor(ms / 1000) % 60, x = Math.floor(ms % 1000);
     return [h, m, s2].map((v) => String(v).padStart(2, "0")).join(":") + (kind === "srt" ? "," : ".") + String(x).padStart(3, "0");
   };
-  const cues = lines.filter((l) => l.ms != null && (l.tgt || l.src)).map((l, i) => `${i + 1}\n${ts(l.ms!)} --> ${ts(Math.max(l.endMs!, l.ms! + 800))}\n${prefix(l)}${l.tgt || l.src}${withSrc && l.tgt && l.src ? "\n" + l.src : ""}\n`);
+  const cues = lines.filter((l) => l.ms != null && (l.tgt || l.src)).map((l, i) => `${i + 1}\n${ts(l.ms!)} --> ${ts(Math.max(l.endMs ?? l.ms!, l.ms! + 800))}\n${prefix(l)}${l.tgt || l.src}${withSrc && l.tgt && l.src ? "\n" + l.src : ""}\n`);
   return (kind === "vtt" ? "WEBVTT\n\n" : "") + cues.join("\n");
 }
