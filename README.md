@@ -54,6 +54,7 @@ npm install
 npm run dev        # dev server (the first run downloads the 28 MB speaker model to public/models/)
 npm test           # unit tests
 npm run build      # output in dist/
+npm run e2e        # end-to-end tests in Chromium against dist/ (fake OpenAI, no API cost)
 ```
 
 Code layout:
@@ -70,6 +71,8 @@ Code layout:
 | `src/tokens.ts` | Token estimates and splitting long logs for summaries |
 | `src/config.ts` | Default models, built-in templates, deployment config |
 | `src/builtin/` | Built-in templates |
+| `tests/` | Unit tests (Vitest) |
+| `e2e/` | End-to-end tests (Playwright) with a fake Realtime WebSocket and translation API |
 
 All large assets are served from the same origin with no external CDN: ffmpeg.wasm (32 MB) and the onnxruntime-web wasm (14 MB) come from npm dependencies, and the CAM++ model is downloaded and sha256-verified by `scripts/fetch-model.mjs` before the build. Each is loaded only when needed.
 
