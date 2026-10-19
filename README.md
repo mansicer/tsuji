@@ -72,6 +72,8 @@ Code layout:
 | `src/glossary.ts` | Glossary text format ↔ entries |
 | `src/subtitle.ts` | Timestamps and SRT / VTT export |
 | `src/tokens.ts` | Token estimates and splitting long logs for summaries |
+| `src/media.ts` | File translation helpers: download with progress, ffmpeg.wasm audio extraction, splitting a segment into timed sentences |
+| `src/sse.ts` | Parsing the Responses API SSE stream and partial JSON for the template creator |
 | `src/config.ts` | Default models, built-in templates, deployment config |
 | `src/builtin/` | Built-in templates |
 | `tests/` | Unit tests (Vitest) |

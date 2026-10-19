@@ -1,8 +1,5 @@
 // @ts-nocheck —— 从单文件页面整体搬过来的主程序,之后按功能逐步拆模块、补类型
 import "./style.css";
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import ffmpegCore from "@ffmpeg/core?url";
-import ffmpegWasm from "@ffmpeg/core/wasm?url";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
 import { applyMemo, memoPrompt, MEMO_SCHEMA } from "./memo";
@@ -15,6 +12,8 @@ import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "./i18n";
+import { fetchProgress, extractPcm, splitTimed } from "./media";
+import { readResponseStream, partialJsonString } from "./sse";
 
 // ---------- 小工具 ----------
 const $ = (s) => document.querySelector(s);
@@ -837,40 +836,12 @@ $("#player").ontimeupdate = () => {
   else if (!cur && prev) prev.classList.remove("active");
 };
 function seekTo(ms) { const p = $("#player"); if (!p.src) return; spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
-// ffmpeg.wasm 核心(约 32 MB)随页面同源发布,首次用到时才加载,之后走浏览器缓存
-let ffmpegP = null;
-// 带进度下载(用于 32 MB 的 ffmpeg 核心和 28 MB 的声纹模型);已缓存时很快走完
-async function fetchProgress(url, onPct, guess) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url.split("/").pop()} ${res.status}`);
-  const total = Number(res.headers.get("content-length")) || guess, rd = res.body.getReader(), parts = []; let got = 0;
-  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onPct && onPct(Math.min(1, got / total)); }
-  const buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
-  return buf;
-}
-function loadFfmpeg(onPct) {
-  return (ffmpegP ||= (async () => {
-    const ff = new FFmpeg();
-    const wasm = URL.createObjectURL(new Blob([await fetchProgress(new URL(ffmpegWasm, location.href).href, onPct, 32232419)], { type: "application/wasm" }));
-    try { await ff.load({ coreURL: new URL(ffmpegCore, location.href).href, wasmURL: wasm }); } finally { URL.revokeObjectURL(wasm); }
-    return ff;
-  })().catch((e) => { ffmpegP = null; throw e; }));
-}
-async function extractPcm(blob) {
-  fileJob.phase = "loading"; fileJob.loadPct = 0; fileProgress();
-  const ff = await loadFfmpeg((p) => { fileJob.loadPct = p; fileProgress(); });
-  fileJob.phase = "extract"; fileJob.extractPct = 0; fileProgress();
-  const onP = ({ progress }) => { fileJob.extractPct = Math.max(0, Math.min(1, progress || 0)); fileProgress(); };
-  ff.on("progress", onP);
-  try {
-    await ff.createDir("/in").catch(() => {});
-    await ff.mount("WORKERFS", { blobs: [{ name: "input", data: blob }] }, "/in");
-    const rc = await ff.exec(["-i", "/in/input", "-vn", "-ac", "1", "-ar", "24000", "-f", "s16le", "/out.pcm"]);
-    if (rc !== 0) throw new Error("ffmpeg " + rc);
-    const d = await ff.readFile("/out.pcm"); await ff.deleteFile("/out.pcm").catch(() => {});
-    return new Int16Array(d.buffer, d.byteOffset, d.byteLength >> 1);
-  } finally { ff.off("progress", onP); await ff.unmount("/in").catch(() => {}); }
-}
+// extractPcm 的进度写进 fileJob,和文件翻译进度条共用
+const pcmCb = {
+  onPhase(ph) { fileJob.phase = ph; if (ph === "loading") fileJob.loadPct = 0; else fileJob.extractPct = 0; fileProgress(); },
+  onLoad(p) { fileJob.loadPct = p; fileProgress(); },
+  onExtract(p) { fileJob.extractPct = p; fileProgress(); },
+};
 // 按说话人断句时停顿 0.3 秒就断句(快速接话时换人处更容易断开),识别费用不变
 function fileConfig() {
   const keep = [cfg.asrModel, cfg.silence]; cfg.asrModel = "gpt-transcribe"; cfg.silence = Math.min(cfg.silence, 300); // 短停顿就断句,便于区分说话人
@@ -892,7 +863,7 @@ async function fileStart() {
   }
   fileJob.active = true; fileJob.err = ""; setGoFile(); setStatus("status.processing", "on"); keepAwake();
   try {
-    if (!fileJob.pcm) fileJob.pcm = await extractPcm(mediaBlob);
+    if (!fileJob.pcm) fileJob.pcm = await extractPcm(mediaBlob, pcmCb);
   } catch (e) { fileJob.active = false; fileJob.phase = "error"; fileJob.err = e.message; setGoFile(); fileProgress(); setStatus("status.paused", "err"); return; }
   if (!fileJob.active || curSess !== ss) return;
   fileJob.total = fileJob.pcm.length / 24; ss.file.duration = fileJob.total; saveSessions();
@@ -958,17 +929,10 @@ function filePump(ws2, ss) {
 function emitTimed(text, s, e) {
   if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
   // 一段里有几句就拆开,时间按字数比例分
-  const re = ["ja", "zh"].includes(cfg.tpl.source) ? /[^。！？]+[。！？]+[」』）)]*|[^。！？]+$/g : /[^.!?]+(?:[.!?]+["')\]]*(?=\s|$))|[^.!?]+$/g;
-  const parts = (text.match(re) || [text]).map((x) => x.trim()).filter(Boolean);
-  const total = parts.reduce((a, x) => a + x.length, 0) || 1; let at = s;
-  for (const ptxt of parts) {
-    const d = (e - s) * ptxt.length / total;
-    if (/[^\s。、！？!?,.，「」『』()（）…]/.test(ptxt)) {
-      diag.asr++; const line = addLine(++nextId, ptxt); setLineTime(line, Math.round(at), Math.round(at + d)); queue.push(line);
-      const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms);
-      if (j >= 0) { lines.splice(lines.indexOf(line), 1); lines.splice(j, 0, line); lines[j + 1].el.before(line.el); }
-    }
-    at += d;
+  for (const p of splitTimed(text, s, e, ["ja", "zh"].includes(cfg.tpl.source))) {
+    diag.asr++; const line = addLine(++nextId, p.text); setLineTime(line, Math.round(p.s), Math.round(p.e)); queue.push(line);
+    const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms);
+    if (j >= 0) { lines.splice(lines.indexOf(line), 1); lines.splice(j, 0, line); lines[j + 1].el.before(line.el); }
   }
   pumpTranslate(); showLat(); saveLines();
 }
@@ -1078,7 +1042,7 @@ async function spkAnalyze() {
     if (!fileJob.pcm) {
       spkBar(null); spkMsg(t("spk.extract"));
       const keep = fileJob.phase;
-      try { fileJob.pcm = await extractPcm(mediaBlob); } finally { fileJob.phase = keep; fileProgress(); }
+      try { fileJob.pcm = await extractPcm(mediaBlob, pcmCb); } finally { fileJob.phase = keep; fileProgress(); }
     }
     if (curSess !== ss) return;
     const pcm = fileJob.pcm, segs = spkSegments(pcm, 24000), n = segs.length, emb = new Float32Array(n * SPK_DIM);
@@ -1533,37 +1497,6 @@ function renderAttachments() {
 }
 $("#chatAttach").onclick = () => $("#attachFile").click();
 $("#attachFile").onchange = async (e) => { await addAttachments([...e.target.files]); e.target.value = ""; };
-// 读 Responses API 的 SSE 流,返回最终的 response 对象(和非流式时 res.json() 一样)
-async function readResponseStream(res, onEvent) {
-  const reader = res.body.getReader(), dec = new TextDecoder();
-  let pending = "", text = "", final = null;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    pending += dec.decode(value, { stream: true });
-    let i;
-    while ((i = pending.indexOf("\n\n")) >= 0) {
-      const chunk = pending.slice(0, i); pending = pending.slice(i + 2);
-      const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
-      if (!data || data === "[DONE]") continue;
-      let ev; try { ev = JSON.parse(data); } catch { continue; }
-      if (ev.type === "response.output_text.delta") text += ev.delta || "";
-      if (ev.type === "response.completed") final = ev.response;
-      if (ev.type === "response.failed" || ev.type === "response.incomplete") throw new Error((ev.response && ev.response.error && ev.response.error.message) || ev.type);
-      if (ev.type === "error") throw new Error(ev.message || (ev.error && ev.error.message) || "stream error");
-      try { onEvent(ev, text); } catch (e) { console.error(e); }
-    }
-  }
-  if (!final) throw new Error("stream ended early");
-  return final;
-}
-// 从还没收完的 JSON 里取出某个字符串字段已到达的部分
-function partialJsonString(buf, key) {
-  const m = buf.match(new RegExp('"' + key + '"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)'));
-  if (!m) return "";
-  let raw = m[1].replace(/\\(u[0-9a-fA-F]{0,3})?$/, "");
-  try { return JSON.parse('"' + raw + '"'); } catch { return ""; }
-}
 async function creatorSend() {
   const typed = $("#chatInput").value.trim();
   if ((!typed && !attachments.length) || creatorBusy) return;
