@@ -11,6 +11,7 @@ import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
 import { LineStore, patchTranslations, mergeLegacy } from "./linestore";
 import { store, storageFailed, setStorageWarn, idb, lsKV, noKV } from "./storage";
+import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 
@@ -693,7 +694,7 @@ const diag = { asr: 0, noise: 0, err: 0, deltas: 0 }; // 现场排障计数
 function fmtS(ms) { return ms ? t("sec", { s: (ms / 1000).toFixed(1) }) : "—"; }
 function showLat() {
   const asr = isStreamingAsr() ? t("lat.stream") : fmtS(lat.asr);
-  const gain = running && !micBroken ? agcGain.toFixed(agcGain < 10 ? 1 : 0) + "×" : "—";
+  const gain = running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
   const item = (k, v, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
   $("#ibItems").replaceChildren(...[
     isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
@@ -788,76 +789,35 @@ function setStatus(key, kind, extra = "") { statusKey = key; statusKind = kind |
 
 // ---------- 麦克风 → 24 kHz PCM16 ----------
 let stream = null, actx = null, tap = null, wakeLock = null;
-let carry = new Float32Array(0), resamplePos = 0, prevSample = 0;
-const CHUNK = 2400; // 100 ms @ 24 kHz
-function toBase64(int16) {
-  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength); // 可能是大数组的切片
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-}
-// 数字增益:离声源远、收音小声时放大。自动模式跟踪语音电平,放大到目标电平(最多 cfg.maxGain 倍)
-let agcLevel = 0.01, agcGain = 1, gainShownAt = 0;
+let rs = null, agc = new Agc(), gainShownAt = 0;
+// 数字增益:离声源远、收音小声时放大(见 audio.ts);信息栏上的倍数每秒最多刷新一次
 function applyGain(x) {
-  if (!x.length) return x;
-  let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
-  rms = Math.sqrt(rms / x.length) + 1e-9;
-  let want;
-  if (cfg.gain === "auto") {
-    // 有声时较快跟上,安静时慢慢回落,免得把底噪放大到满格
-    agcLevel = rms > agcLevel * 0.5 ? agcLevel * 0.997 + rms * 0.003 : agcLevel * 0.9995 + rms * 0.0005;
-    want = Math.min(cfg.maxGain, Math.max(1, cfg.agcTarget / agcLevel));
-  } else want = Number(cfg.gain) || 1;
-  agcGain = agcGain * 0.99 + want * 0.01;
-  if (running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
-  if (agcGain === 1) return x;
-  const y = new Float32Array(x.length);
-  for (let i = 0; i < x.length; i++) y[i] = Math.max(-1, Math.min(1, x[i] * agcGain));
-  return y;
+  x = agc.apply(x, cfg.gain, cfg.maxGain, cfg.agcTarget);
+  if (x.length && running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
+  return x;
 }
 // 信号格:放大后的音量分 5 格,只在格数变化时改 DOM
-const SIG_STEPS = [0.03, 0.1, 0.22, 0.4, 0.7];
 function setSignal(v) {
-  const n = SIG_STEPS.filter((x) => v >= x).length, s = $("#signal");
+  const n = sigStep(v), s = $("#signal");
   if (s.dataset.level !== String(n)) s.dataset.level = n;
 }
 let lastSampleAt = 0;
 function onSamples(input) {
   if (!actx) return; // 停止后 worklet 可能还有一条消息在路上
   lastSampleAt = performance.now();
-  // 线性重采样到 24 kHz(AudioContext 拿不到 24 kHz 时才用到)
-  let x = input;
-  if (actx.sampleRate !== 24000) {
-    const ratio = actx.sampleRate / 24000, out = [];
-    // resamplePos 可能落在 [-1, 0):用上一块的最后一个样本插值(原先读 input[-1] 得到 NaN)
-    while (resamplePos < input.length - 1) {
-      const i = Math.floor(resamplePos), f = resamplePos - i;
-      out.push((i < 0 ? prevSample : input[i]) * (1 - f) + input[i + 1] * f);
-      resamplePos += ratio;
-    }
-    resamplePos -= input.length;
-    prevSample = input[input.length - 1];
-    x = Float32Array.from(out);
-  }
+  let x = rs.resample(input);
   x = applyGain(x);
   let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
   setSignal(Math.sqrt(rms / (x.length || 1)) * 4);
-  const merged = new Float32Array(carry.length + x.length);
-  merged.set(carry); merged.set(x, carry.length);
-  let off = 0;
-  while (merged.length - off >= CHUNK) {
-    const pcm = new Int16Array(CHUNK);
-    for (let i = 0; i < CHUNK; i++) { const v = Math.max(-1, Math.min(1, merged[off + i])); pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff; }
-    off += CHUNK;
+  for (const pcm of rs.chunk(x)) {
     if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
   }
-  carry = merged.slice(off);
 }
 async function startMic() {
   // iOS Safari:AudioContext 要在点击的同步阶段建好并 resume(await 之后就不算用户手势了);
   // 也不能指定 24 kHz(和硬件采样率不一致时麦克风只出静音),统一用默认采样率再在 JS 里重采样
   const Ctx = window.AudioContext || window.webkitAudioContext;
-  actx = new Ctx();
+  actx = new Ctx(); rs = new Resampler(actx.sampleRate);
   const resumed = actx.resume().catch(() => {});
   const want = { channelCount: 1, ...cfg.mic };
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: cfg.micId ? { ...want, deviceId: { exact: cfg.micId } } : want }); }
@@ -899,7 +859,7 @@ function stop() {
   if (ws) { try { ws.close(); } catch {} ws = null; }
   if (stream) stream.getTracks().forEach((x) => x.stop());
   if (actx) actx.close();
-  stream = actx = tap = null; carry = new Float32Array(0); resamplePos = 0; agcLevel = 0.01; agcGain = 1;
+  stream = actx = tap = rs = null; agc = new Agc();
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   $("#go").textContent = t("live.start"); $("#go").classList.remove("stop");
   setSignal(0); showLat();
@@ -937,7 +897,7 @@ async function restartMic() {
   try {
     if (stream) stream.getTracks().forEach((x) => x.stop());
     if (actx) actx.close().catch(() => {});
-    stream = actx = tap = null; carry = new Float32Array(0); resamplePos = 0; prevSample = 0;
+    stream = actx = tap = rs = null;
     await startMic();
     lastSampleAt = performance.now();
   } catch (e) {

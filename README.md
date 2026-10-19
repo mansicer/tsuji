@@ -64,6 +64,7 @@ Code layout:
 | `index.html` | Page skeleton |
 | `src/main.ts` | Main application |
 | `src/storage.ts` | localStorage / IndexedDB primitives and storage-failure warning throttling |
+| `src/audio.ts` | Microphone signal processing: resampling to 24 kHz PCM16 chunks, digital gain / AGC, signal level steps |
 | `src/spk/core.ts` | Speaker identification math: resampling, energy-based segmentation, Kaldi-compatible fbank, clustering, smoothing |
 | `src/spk/judge.ts` | GPT speaker judgment |
 | `src/memo.ts` | Translation memory notes |
