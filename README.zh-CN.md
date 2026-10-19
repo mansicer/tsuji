@@ -66,6 +66,27 @@ npm run deploy:selfhost                  # 只发布已提交的代码;大文件
 
 需要放行的接口:`/realtime`(WebSocket)、`/chat/completions`、`/responses`。用户在设置里填了自己的密钥时仍然直连 OpenAI。
 
+### 自托管 + ChatGPT(Codex)订阅(可选)
+
+OpenClaw、pi、Hermes Agent 等工具可以登录 ChatGPT 账号，用 Codex 订阅发 LLM 请求，不用另付 API 费用。Tsuji 自托管时也可以这样用。网页本身没法登录 ChatGPT，所以登录放在服务器上:
+
+1. 在服务器上运行一个用 ChatGPT 账号登录、对外提供 OpenAI 兼容接口的转接程序，例如 [GPTMock](https://github.com/rapidrabbit76/GPTMock)(从 [ChatMock](https://github.com/RayBytes/ChatMock) 分支而来):先 `uvx gptmock login`，再 `uvx gptmock serve`，监听 `http://127.0.0.1:8000/v1`。只监听本机，不要直接暴露到公网。
+2. 在 `VITE_SERVER_API` 后面的反代(和上面一样挡一层登录)里按接口分流:
+
+   | `VITE_SERVER_API` 下的路径 | 转发到 |
+   |---|---|
+   | `/chat/completions`(翻译、摘要、说话人判定) | 转接程序 |
+   | `/responses`(模板创建) | 转接程序 |
+   | `/realtime`(语音识别，WebSocket) | 照旧转到 `api.openai.com` 并加 API 密钥 |
+
+   语音识别用的是 Realtime 转写接口，ChatGPT 订阅不包含，所以这部分仍然需要 API 密钥。
+3. 设置里的翻译模型和模板生成模型可选 `gpt-6.1-sol`、`gpt-6-luna`。用转接程序的 `/v1/models` 确认所选模型在你的订阅里可用；名字对不上时，在反代里改写请求的 `model` 字段。
+
+注意:
+- 「记录」里的费用估算会跳过 `usage` 里带 `"billed_to": "chatgpt_subscription"` 的请求。转接程序没有加这个字段的话，在反代里自己加上，这些请求就不计入估算；不加则按 API 官方价格计入。
+- 转接程序是模仿 Codex 客户端发请求的，不一定支持所有请求参数。模板创建里的联网搜索和上传附件最可能出问题。
+- 在 OpenAI 自家应用之外用订阅登录不是官方 API。它消耗的是订阅的 Codex 额度，随时可能失效；是否符合 OpenAI 的使用条款，需要部署者自己确认。
+
 ## 致谢
 
 - 声纹模型:[3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++(`speech_campplus_sv_zh-cn_16k-common`),onnx 版本来自 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)

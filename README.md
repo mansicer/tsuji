@@ -76,6 +76,27 @@ npm run deploy:selfhost                  # deploys committed code only; pre-comp
 
 Endpoints the proxy must allow: `/realtime` (WebSocket), `/chat/completions` and `/responses`. Users who enter their own key in Settings still connect to OpenAI directly.
 
+### Self-hosted with a ChatGPT (Codex) subscription (optional)
+
+Tools such as OpenClaw, pi and Hermes Agent can sign in with a ChatGPT account and send LLM requests through the Codex subscription instead of a paid API key. Tsuji can do the same when self-hosted. The browser page cannot sign in to ChatGPT itself, so the sign-in lives on your server:
+
+1. On the server, run a bridge that signs in with your ChatGPT account and exposes an OpenAI-compatible API, for example [GPTMock](https://github.com/rapidrabbit76/GPTMock) (a fork of [ChatMock](https://github.com/RayBytes/ChatMock)): `uvx gptmock login`, then `uvx gptmock serve`, which listens on `http://127.0.0.1:8000/v1`. Keep it bound to localhost.
+2. In the reverse proxy behind `VITE_SERVER_API` (the same login-protected path as above), route by endpoint:
+
+   | Path under `VITE_SERVER_API` | Send to |
+   |---|---|
+   | `/chat/completions` (translation, summaries, speaker judgment) | the bridge |
+   | `/responses` (template creator) | the bridge |
+   | `/realtime` (speech recognition, WebSocket) | `api.openai.com` with your API key, as before |
+
+   Speech recognition uses the Realtime transcription API, which a ChatGPT subscription does not cover, so an API key is still needed for it.
+3. Settings offers `gpt-6.1-sol` and `gpt-6-luna` for translation and templates. Check with the bridge's `/v1/models` that the ones you choose are available on your plan; if a name differs, rewrite the `model` field in your proxy.
+
+Notes:
+- The spend estimate in Records skips requests whose `usage` contains `"billed_to": "chatgpt_subscription"`. If your bridge doesn't add this field, add it in your proxy to leave those requests out; otherwise they are counted at API list prices.
+- Bridges mimic the Codex client and may not support every request option. Web search and file attachments in the template creator are the most likely to fail.
+- Signing in with a subscription outside OpenAI's own apps is not an official API. It uses your plan's Codex limits, can stop working without notice, and you are responsible for checking it against OpenAI's terms.
+
 ## Acknowledgements
 
 - Speaker model: [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++ (`speech_campplus_sv_zh-cn_16k-common`), ONNX export from [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
