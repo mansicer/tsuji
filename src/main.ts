@@ -10,26 +10,14 @@ import { parseGlossary, glossaryText } from "./glossary";
 import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
 import { LineStore, patchTranslations, mergeLegacy } from "./linestore";
+import { store, storageFailed, setStorageWarn, idb, lsKV, noKV } from "./storage";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
 
 // ---------- 小工具 ----------
 const $ = (s) => document.querySelector(s);
-const store = {
-  get(k, d) { try { const v = localStorage.getItem("jls." + k); return v === null ? d : v; } catch { return d; } },
-  set(k, v) { try { v === null ? localStorage.removeItem("jls." + k) : localStorage.setItem("jls." + k, v); } catch (e) { if (v !== null) storageFailed(e); } },
-  json(k, d) { try { return JSON.parse(this.get(k, "null")) ?? d; } catch { return d; } },
-};
-// 存储写满时提示(一分钟最多一次;字幕还在页面上,删掉旧会话腾出空间后会继续保存);
-// 存储被浏览器禁用时只提示一次,删会话也没用
-let storageWarnAt = 0, storageOffWarned = false;
-function isQuotaError(e) { return !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014); }
-function storageFailed(e) {
-  console.error(e);
-  if (!isQuotaError(e)) { if (!storageOffWarned) { storageOffWarned = true; flash(t("flash.storageOff")); } return; }
-  if (Date.now() - storageWarnAt < 60000) return;
-  storageWarnAt = Date.now(); flash(t("flash.storage"));
-}
+// 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
+setStorageWarn((kind) => flash(t(kind === "full" ? "flash.storage" : "flash.storageOff")));
 function el(tag, props = {}, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter((k) => k != null)); return e; }
 
 function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value) + (uiLang === "zh" ? "" : " ") + t("set.ctModelHint"); }
@@ -990,39 +978,6 @@ function setLineTime(line, s, e) {
   line.ms = s; line.endMs = e; line.t = new Date(MEDIA_BASE + e);
   if (!line.el.querySelector(".tm")) line.el.prepend(el("div", { className: "tm", textContent: fmtClock(s) }));
 }
-// 原文件存在浏览器 IndexedDB,刷新后还能播放、续处理
-const idb = {
-  db: null,
-  open() { return (this.db ||= new Promise((ok, bad) => { const r = indexedDB.open("jls", 1); r.onupgradeneeded = () => r.result.createObjectStore("files"); r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error); })); },
-  async run(mode, fn) { const db = await this.open(); return new Promise((ok, bad) => { const tx = db.transaction("files", mode); const rq = fn(tx.objectStore("files")); tx.oncomplete = () => ok(rq.result); tx.onerror = () => bad(tx.error); tx.onabort = () => bad(tx.error); }); },
-  put(k, v) { return this.run("readwrite", (st) => st.put(v, k)); },
-  get(k) { return this.run("readonly", (st) => st.get(k)); },
-  del(k) { return this.run("readwrite", (st) => st.delete(k)); },
-  async entries(prefix) {
-    const db = await this.open();
-    return new Promise((ok, bad) => {
-      const tx = db.transaction("files", "readonly"), st = tx.objectStore("files"), range = IDBKeyRange.bound(prefix, prefix + "\uffff");
-      const ks = st.getAllKeys(range), vs = st.getAll(range);
-      tx.oncomplete = () => ok(ks.result.map((k, i) => [k, vs.result[i]])); tx.onerror = () => bad(tx.error);
-    });
-  },
-};
-// IndexedDB 不可用(个别隐私模式)时退回 localStorage,和以前一样
-const lsKV = {
-  async entries(prefix) {
-    const out = [];
-    for (const k of Object.keys(localStorage)) if (k.startsWith("jls." + prefix)) { try { out.push([k.slice(4), JSON.parse(localStorage.getItem(k))]); } catch {} }
-    return out;
-  },
-  async put(k, v) { localStorage.setItem("jls." + k, JSON.stringify(v)); },
-  async del(k) { localStorage.removeItem("jls." + k); },
-};
-// 两种存储都被禁用(例如 Safari「阻止所有 Cookie」):不持久化,页面照常能用
-const noKV = {
-  async entries() { return []; },
-  async put() { throw new DOMException("storage unavailable", "SecurityError"); },
-  async del() {},
-};
 let lineStore = new LineStore(noKV, storageFailed);
 async function loadLineStore() {
   for (const [kv, name] of [[idb, "IndexedDB"], [lsKV, "localStorage"]]) {

@@ -47,7 +47,7 @@ npm run build      # 输出到 dist/
 npm run e2e        # 端到端测试:在 Chromium 里跑 dist/,OpenAI 接口是假的,不花钱
 ```
 
-代码结构:`index.html`(页面骨架)、`src/main.ts`(主程序)、`src/spk/core.ts`(说话人识别的纯计算部分:重采样、能量切分、Kaldi 兼容 fbank、聚类、平滑)、`src/spk/judge.ts`(说话人的 GPT 判定)、`src/memo.ts`(翻译记忆)、`src/glossary.ts`(词汇表文本与条目互转)、`src/subtitle.ts`(时间戳与 SRT / VTT 导出)、`src/tokens.ts`(摘要的 token 估算与分段)、`src/config.ts`(默认模型、内置模板、部署配置)、`src/builtin/`(内置模板)、`tests/`(单元测试)、`e2e/`(端到端测试,用假的 Realtime WebSocket 和翻译接口)。
+代码结构:`index.html`(页面骨架)、`src/main.ts`(主程序)、`src/storage.ts`(localStorage / IndexedDB 存储底层与写入失败提示节流)、`src/spk/core.ts`(说话人识别的纯计算部分:重采样、能量切分、Kaldi 兼容 fbank、聚类、平滑)、`src/spk/judge.ts`(说话人的 GPT 判定)、`src/memo.ts`(翻译记忆)、`src/glossary.ts`(词汇表文本与条目互转)、`src/subtitle.ts`(时间戳与 SRT / VTT 导出)、`src/tokens.ts`(摘要的 token 估算与分段)、`src/config.ts`(默认模型、内置模板、部署配置)、`src/builtin/`(内置模板)、`tests/`(单元测试)、`e2e/`(端到端测试,用假的 Realtime WebSocket 和翻译接口)。
 
 大文件都和页面同源发布,不依赖外部 CDN:ffmpeg.wasm(32 MB)和 onnxruntime-web 的 wasm(14 MB)来自 npm 依赖,CAM++ 模型构建前由 `scripts/fetch-model.mjs` 下载并校验 sha256。三者都只在用到时才加载。
 
