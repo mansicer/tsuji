@@ -8,7 +8,7 @@ export interface PromptTpl { name?: string; source?: string; target?: string; de
 /** 提示词用到的配置:当前模板和解析好的词汇表 */
 export interface PromptCfg { tpl: PromptTpl; glossary: Glossary }
 
-// 和 main.ts / i18n.ts 里的 CJK 相同,复制一份免得依赖界面语言模块
+// 和 i18n.ts 里的 CJK 相同。i18n 依赖 config(加载时读 location),复制一份免得提示词和它的测试拖上界面语言模块
 const CJK = /[぀-ヿ㐀-鿿가-힯]/;
 
 export function sep(cfg: PromptCfg): string { return CJK.test(cfg.tpl.asrPrompt || cfg.tpl.name || "") || ["ja", "zh"].includes(cfg.tpl.source || "") ? "、" : ", "; }
