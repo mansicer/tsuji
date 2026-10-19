@@ -1,5 +1,8 @@
 import { defineConfig } from "@playwright/test";
 
+// 同时跑几份(例如多个工作区)时用 E2E_PORT 错开端口
+const port = Number(process.env.E2E_PORT) || 4173;
+
 // 端到端测试:对构建好的 dist/ 跑(先 npm run build)。OpenAI 的 WebSocket 和翻译接口都在页面里换成假的,不花钱
 export default defineConfig({
   testDir: "e2e",
@@ -7,7 +10,7 @@ export default defineConfig({
   timeout: 60_000,
   reporter: process.env.CI ? [["github"], ["list"]] : "list",
   use: {
-    baseURL: "http://localhost:4173/",
+    baseURL: `http://localhost:${port}/`,
     screenshot: "only-on-failure",
     launchOptions: {
       // 本机已有 Chromium 时可用 CHROMIUM_PATH 指定,省得下载 Playwright 自带的
@@ -16,8 +19,8 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "npx vite preview --port 4173 --strictPort",
-    url: "http://localhost:4173/",
+    command: `npx vite preview --port ${port} --strictPort`,
+    url: `http://localhost:${port}/`,
     reuseExistingServer: !process.env.CI,
   },
 });

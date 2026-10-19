@@ -63,12 +63,19 @@ Code layout:
 |---|---|
 | `index.html` | Page skeleton |
 | `src/main.ts` | Main application |
+| `src/storage.ts` | localStorage / IndexedDB primitives and storage-failure warning throttling |
+| `src/audio.ts` | Microphone signal processing: resampling to 24 kHz PCM16 chunks, digital gain / AGC, signal level steps |
+| `src/i18n.ts` | UI strings (zh / en), interface language, language names |
 | `src/spk/core.ts` | Speaker identification math: resampling, energy-based segmentation, Kaldi-compatible fbank, clustering, smoothing |
 | `src/spk/judge.ts` | GPT speaker judgment |
 | `src/memo.ts` | Translation memory notes |
 | `src/glossary.ts` | Glossary text format ↔ entries |
 | `src/subtitle.ts` | Timestamps and SRT / VTT export |
 | `src/tokens.ts` | Token estimates and splitting long logs for summaries |
+| `src/media.ts` | File translation helpers: download with progress, ffmpeg.wasm audio extraction, splitting a segment into timed sentences |
+| `src/sse.ts` | Parsing the Responses API SSE stream and partial JSON for the template creator |
+| `src/prompts.ts` | ASR prompt and keywords, translation system prompt and output schema |
+| `src/cost.ts` | Price tables and ASR / translation cost arithmetic |
 | `src/config.ts` | Default models, built-in templates, deployment config |
 | `src/builtin/` | Built-in templates |
 | `tests/` | Unit tests (Vitest) |

@@ -1,38 +1,29 @@
 // @ts-nocheck —— 从单文件页面整体搬过来的主程序,之后按功能逐步拆模块、补类型
 import "./style.css";
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import ffmpegCore from "@ffmpeg/core?url";
-import ffmpegWasm from "@ffmpeg/core/wasm?url";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
-import { applyMemo, memoPrompt, MEMO_SCHEMA } from "./memo";
+import { applyMemo, memoPrompt } from "./memo";
 import { parseGlossary, glossaryText } from "./glossary";
 import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
 import { LineStore, patchTranslations, mergeLegacy } from "./linestore";
+import { store, storageFailed, setStorageWarn, idb, lsKV, noKV } from "./storage";
+import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
+import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "./i18n";
+import { fetchProgress, extractPcm, splitTimed } from "./media";
+import { readResponseStream, partialJsonString } from "./sse";
+import { asrPrompt, keywords, glossaryForLLM, SYSTEM, SCHEMA } from "./prompts";
+import { WEB_SEARCH_PER_CALL, asrCost, mtCost } from "./cost";
 
 // ---------- 小工具 ----------
 const $ = (s) => document.querySelector(s);
-const store = {
-  get(k, d) { try { const v = localStorage.getItem("jls." + k); return v === null ? d : v; } catch { return d; } },
-  set(k, v) { try { v === null ? localStorage.removeItem("jls." + k) : localStorage.setItem("jls." + k, v); } catch (e) { if (v !== null) storageFailed(e); } },
-  json(k, d) { try { return JSON.parse(this.get(k, "null")) ?? d; } catch { return d; } },
-};
-// 存储写满时提示(一分钟最多一次;字幕还在页面上,删掉旧会话腾出空间后会继续保存);
-// 存储被浏览器禁用时只提示一次,删会话也没用
-let storageWarnAt = 0, storageOffWarned = false;
-function isQuotaError(e) { return !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014); }
-function storageFailed(e) {
-  console.error(e);
-  if (!isQuotaError(e)) { if (!storageOffWarned) { storageOffWarned = true; flash(t("flash.storageOff")); } return; }
-  if (Date.now() - storageWarnAt < 60000) return;
-  storageWarnAt = Date.now(); flash(t("flash.storage"));
-}
+// 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
+setStorageWarn((kind) => flash(t(kind === "full" ? "flash.storage" : "flash.storageOff")));
 function el(tag, props = {}, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter((k) => k != null)); return e; }
 
-function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value) + (uiLang === "zh" ? "" : " ") + t("set.ctModelHint"); }
+function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value) + (getUiLang() === "zh" ? "" : " ") + t("set.ctModelHint"); }
 
 // 滑动条刻度:每项列出带数字的主刻度,默认值高亮;点刻度直接跳到该值
 const TICKS = {
@@ -64,180 +55,9 @@ function updateRangeFill() {
 }
 
 // ---------- 界面语言 ----------
-const I18N = {
-  zh: {
-    "app": "实时翻译", "hdr.home": "模板", "hdr.sessions": "会话", "hdr.settings": "设置", "tpl.title": "模板", "card.file": "翻译文件", "sess.file": "文件", "sess.live": "实时",
-    "file.start": "开始处理", "file.pause": "暂停", "file.resume": "继续处理", "file.redo": "重新处理", "file.redoSure": "再次点击以清空字幕并重新处理", "file.reattach": "重新选择原文件",
-    "file.idle": "时长 {total}。点击“开始处理”，以 {speed} 倍速识别并翻译。", "file.loading": "正在下载解码组件 {pct}%(约 32 MB，仅首次需要)", "file.extract": "正在提取音轨 {pct}%",
-    "file.run": "识别 {pct}% · {pos} / {total} · {speed} 倍速 · 预计剩余 {eta} · 已翻译 {done}/{n} 句", "file.flush": "正在完成最后的识别和翻译 · 已翻译 {done}/{n} 句",
-    "file.paused": "已暂停 · 已处理 {pos} / {total} · {n} 句字幕", "file.done": "已完成 · 时长 {total} · {n} 句字幕", "file.missing": "本地没有保存原文件，请重新选择同一个文件后再播放或处理。",
-    "file.err": "处理中断：{m}。点击“继续处理”可从中断处接着处理。", "file.noStore": "文件较大，未能保存到浏览器本地；刷新页面后需要重新选择文件。", "file.asrNote": "文件翻译固定使用 gpt-transcribe，以获得精确的时间戳。",
-    "status.processing": "处理中", "status.paused": "已暂停", "status.done": "已完成",
-    "home.sessIntro": "每次翻译是一个会话，各自保存所用的模板、语言、设置和字幕记录，可以随时回来继续。", "home.newSession": "新建翻译",
-    "home.noSessions": "还没有翻译会话。点击“新建翻译”，选择一个模板即可开始。",
-    "sess.continue": "继续", "sess.rename": "重命名", "sess.export": "导出字幕", "sess.del": "删除", "sess.delSure": "再次点击以确认删除",
-    "sess.meta": "{tpl} · {src} → {tgt}", "sess.when": "{time} · {n} 条字幕", "sess.tplMissing": "模板已删除",
-    "set.sessChip": "本会话", "set.sessCur": "当前会话：{name}", "set.sessNone": "尚未创建会话。下面标有“本会话”的设置将作为新会话的默认值。",
-    "status.idle": "未开始", "status.connecting": "正在连接", "status.listening": "正在收音", "status.reconnect": "连接中断，正在重连", "status.keyBad": "API 密钥无效",
-    "status.https": "需要 HTTPS 连接", "status.noMic": "未获得麦克风权限", "status.stopped": "已停止", "status.tapFix": "，请轻触屏幕恢复", "status.micCant": "麦克风无法使用，请停止后重新开始",
-    "mic.ended": "麦克风已断开", "mic.muted": "麦克风已被系统暂停", "mic.ctx": "音频处理未运行", "mic.nodata": "未收到音频数据",
-    "home.intro": "选择一个模板即可开始新的翻译会话。模板包含背景说明、翻译风格和词表，可为语音识别与翻译提供上下文，显著提高准确度。",
-    "home.noKey": "尚未配置 OpenAI API 密钥，请在“设置”中填写。",
-    "home.new": "新建模板", "home.import": "导入模板", "home.importFail": "导入失败：文件不是有效的模板。",
-    "card.open": "开始翻译", "card.edit": "编辑", "card.dup": "复制", "card.export": "导出", "card.del": "删除", "card.delSure": "再次点击以确认删除",
-    "card.reset": "恢复内置版本", "card.builtin": "内置", "card.modified": "已修改", "card.current": "当前使用",
-    "card.meta": "{src} → {tgt} · 说话人 {p} 位 · 词条 {n} 个", "card.copy": " 副本",
-    "live.start": "开始收音", "live.stop": "停止收音", "live.follow": "自动滚动", "live.unfollow": "回到最新",
-    "live.empty": "点击下方“开始收音”。请将设备朝向声源，并保持屏幕常亮。", "live.emptyKey": "请先在“设置”中填写 OpenAI API 密钥，然后点击下方“开始收音”。",
-    "line.translating": "正在翻译……", "line.noise": "未识别到有效语音", "line.failed": "翻译失败", "line.unfinished": "页面刷新前未完成翻译", "line.sep": "以上为之前的 {n} 条记录",
-    "lat.stream": "流式", "ib.gain": "增益", "ib.asr": "识别", "ib.mt": "翻译", "ib.avg": "平均", "ib.queue": "待翻译", "ib.lines": "语句", "ib.noise": "杂音", "ib.err": "错误", "ib.cost": "累计费用", "ib.level": "输入音量", "ib.deltas": "已收到识别片段 {n} 个", "sec": "{s} 秒",
-    "cost": "预估累计费用：识别 {a}，翻译与模板 {m}，合计 {t}。按官方价格与实际用量估算（服务器用 ChatGPT 订阅处理的请求不计入），仅统计本设备，刷新页面后保留。",
-    "flash.storage": "浏览器存储已满，字幕记录没能保存。请在会话列表里删掉不需要的旧会话。", "flash.storageOff": "浏览器禁用了本地存储，字幕记录不会保存，刷新页面后会丢失。", "flash.mt": "翻译失败：", "flash.timeout": "请求超时", "flash.asr": "识别出错：", "flash.mic": "无法打开麦克风：", "flash.https": "需通过 HTTPS 访问本页面才能使用麦克风。",
-    "create.titleNew": "新建模板", "create.titleEdit": "编辑模板", "create.tabChat": "对话", "create.tabDraft": "模板草稿 · {n} 条",
-    "create.placeholder": "请描述翻译场合，例如活动、课程或会议名称、日期、出演者或讲师、官方网站链接，以及容易听错的词语。",
-    "create.send": "发送", "create.attach": "附件", "create.attachRemove": "移除", "create.attachTooBig": "附件总大小不能超过 {m} MB。", "create.attachRead": "无法读取文件：{name}", "create.attachOnly": "请阅读附件，并据此完善模板。", "create.thinking": "{st}，已用时 {s} 秒", "create.stStart": "正在分析需求", "create.stSearch": "正在联网检索，第 {n} 次", "create.stSearched": "已检索：{q}", "create.stWriting": "正在撰写回复", "create.stDraft": "正在生成模板，已整理 {n} 个条目", "create.err": "出错：{m}",
-    "create.welcome": "请描述需要翻译的场合，例如活动、节目、会议、课程或比赛。信息越具体越好，包括名称、日期、出演者或参会者、官方网站链接以及容易听错的词语，也可以直接粘贴相关资料，或通过“附件”上传课件、论文、讲义、台本等文件。\n\n我会联网检索，并将背景说明、翻译风格、说话人和词表整理到模板草稿中。在手机上，请切换到“模板草稿”页查看。草稿可随时手动修改，修改后也可以让我继续补充。",
-    "create.welcomeEdit": "正在编辑“{name}”。你可以让我补充词表，例如“加入今天的嘉宾和环节名称”，或调整翻译风格，也可以直接修改草稿。",
-    "create.updated": "草稿已更新：说话人 {p} 位，词条 {n} 个。", "create.noKey": "请先在“设置”中填写 OpenAI API 密钥。",
-    "draft.name": "模板名称", "draft.source": "源语言", "draft.target": "目标语言",
-    "draft.desc": "背景说明", "draft.descHint": "提供给翻译模型的背景信息，例如场合、参与者及其相互关系。",
-    "draft.style": "翻译风格", "draft.styleHint": "对译文的具体要求，例如称呼、语气和固定译法。",
-    "draft.spkNotes": "说话人线索", "draft.spkNotesHint": "帮助区分说话人：每人怎么自我介绍、怎么称呼自己和别人、谁负责主持、说话习惯，以及常见的出场阵容。仅用于说话人识别，不影响翻译。",
-    "draft.asr": "语音识别提示", "draft.asrHint": "请使用源语言写一两句话，描述音频内容。说话人和词表会自动附加在后面。",
-    "draft.gloss": "说话人与词表：{p} 位说话人，{n} 个词条", "draft.glossHint": "每行格式为：原文 | 读音 | 译文 | 备注。以 @ 开头的行表示说话人，以 # 开头的行为注释。语音识别使用原文拼写，翻译统一使用译文。",
-    "draft.editText": "编辑文本", "draft.viewTable": "表格视图", "draft.save": "保存", "draft.saveStart": "保存并开始", "draft.discard": "放弃",
-    "draft.needName": "请填写模板名称", "draft.discardSure": "再次点击以确认放弃", "draft.speaker": "说话人",
-    "g.src": "原文", "g.reading": "读音", "g.tgt": "译文", "g.notes": "备注",
-    "set.title": "设置", "set.done": "完成", "sec.general": "通用", "set.uiLang": "界面语言", "set.apiKey": "OpenAI API 密钥",
-    "set.keyHint": "可留空。留空时通过本站服务器转发请求并使用服务器配置的密钥，密钥不会出现在网页中。填写后将直接连接 OpenAI，密钥仅保存在本设备的浏览器中。",
-    "set.keyHintByok": "密钥仅保存在本设备的浏览器中，页面直接连接 OpenAI，不经过任何服务器。",
-    "sec.lang": "语言", "set.langHint": "仅对当前会话生效，不会修改模板，点击“完成”后生效。", "set.editTpl": "编辑当前模板", "set.curTpl": "当前模板：{name}",
-    "sec.models": "模型", "set.asrModel": "语音识别模型", "set.mtModel": "翻译模型", "set.effort": "翻译推理强度", "set.ctModel": "模板生成模型", "set.ctModelHint": "同时用于说话人判定和整理摘要。",
-    "ctDesc.gpt-6.1-sol": "默认模型。用于和 GPT 对话创建模板，联网检索与整理词表效果好。",
-    "ctDesc.gpt-6-luna": "费用约为 gpt-6.1-sol 的十分之一，资料整理可能不够完整。",
-    "asrDesc.gpt-transcribe": "按句识别，准确度高，词表将作为关键词使用，费用约为 gpt-live-transcribe 的四分之一。",
-    "asrDesc.gpt-live-transcribe": "默认模型。流式识别，边听边出字，延迟低，支持词表。",
-    "mtDesc.gpt-6.1-sol": "准确度最高，平均延迟约 2.7 秒，费用约为 gpt-6-luna 的十倍。",
-    "mtDesc.gpt-6-luna": "默认模型。费用约为 gpt-6.1-sol 的十分之一，细节处理略弱。",
-    "opt.effortNone": "不设置", "opt.effortMinimal": "最低", "opt.effortLow": "低", "opt.effortMedium": "中", "opt.effortHigh": "高",
-    "set.effortHint": "默认为“中”。强度越高，翻译越慢。非推理模型请选择“不设置”。",
-    "set.micDev": "麦克风", "opt.micDefault": "系统默认", "opt.micN": "麦克风 {n}", "opt.micMissing": "之前选择的麦克风（当前未连接）", "set.micDevHint": "收音中切换会立即改用新的麦克风。", "set.micDevNoLabel": "开始收音并允许使用麦克风后，这里会显示各设备的名称。", "flash.micFallback": "所选麦克风不可用，已改用系统默认麦克风。", "u.x": "{v}×", "u.ms": "{v} 毫秒", "u.s": "{v} 秒", "u.px": "{v} px", "u.pct": "{v}%",
-    "spk.btn": "说话人", "spk.title": "说话人识别", "spk.beta": "实验功能", "spk.close": "关闭",
-   
-   
-   
-   
-   
-    "spk.judging": "GPT 正在根据 {n} 句字幕判定说话人，已用 {s} 秒(一集通常需要几十秒)……", "spk.judged": "其中 {n} 句由 GPT 根据上下文判定(虚线标签)。",
-   
-    "spk.by.self_intro": "GPT 判定:自我介绍", "spk.by.addressed": "GPT 判定:被点名后回答", "spk.by.turn_taking": "GPT 判定:对话轮次", "spk.by.content": "GPT 判定:内容与说话习惯", "spk.by.voice": "GPT 判定:声纹", "spk.by.unknown": "GPT 判定",
-    "sec.spk": "说话人", "spk.settings": "说话人设置", "spk.on": "识别说话人", "spk.onHint": "开启后自动标出每句字幕是谁说的：先在本机分析声音并分组(首次需下载约 40 MB 组件，不消耗 API)，再由 GPT 结合字幕内容和当前模板的出演者、说话人线索确定每组是谁、补全声音不够确定的句子(消耗 API，一集约几美分)。文件处理完成后自动进行，已处理完的文件开启后立即开始。结果显示在字幕、画面和导出文件中，关闭后隐藏但不删除。", "spk.introOff": "说话人识别未开启。开启后会自动标出每句字幕是谁说的。", "spk.introOn": "下面是按声音分出的各组和认出的名字。名字不对可以直接改，改完点“重新识别”，GPT 会以你的名字为准重新判定；几组改成同一个名字即合并。点“试听”可听该组最有代表性的一段。", "spk.enable": "开启说话人识别", "spk.start": "开始识别", "spk.rerun": "重新识别", "spk.none": "尚未识别。点击“开始识别”。", "spk.wait": "文件处理完成后会自动识别。", "spk.needKey": "GPT 判定需要 API 密钥，请先在设置中填写。", "spk.done": "已分为 {k} 组，标注 {a} / {b} 句字幕。", "file.spk": "已完成字幕 · 说话人识别：{m}", "spk.confirm": "开启前请确认：首次使用需要下载约 40 MB 的声音分析组件(之后由浏览器缓存)，建议在 Wi-Fi 下进行；每个文件识别时还会调用一次 GPT，按 API 计费，一集约几美分。", "spk.confirmOk": "确认开启", "spk.confirmNo": "暂不开启", "spk.saveVoices": "把这些声音存进模板", "spk.saveVoicesHint": "确认各组名字无误后保存。之后用同一个模板处理文件时，会自动对照这些声音来认人，减少认错。只保存声音特征(每人约 1 KB)，不保存录音；同名的会和已存的合并。", "spk.saved": "已存入模板：{names}", "spk.lib": "模板声纹库：{names}", "spk.libNone": "模板声纹库：暂无", "spk.libMatch": "像声纹库里的 {name}", "spk.clearVoices": "清空声纹库", "spk.clearVoicesSure": "再次点击以清空", "spk.n": "说话人 {n}", "spk.unsure": "不确定", "spk.play": "试听", "spk.meta": "{dur} · {n} 段",
-    "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在重新提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
-   
-    "spk.err": "分析失败：{m}", "spk.needMedia": "需要原文件才能分析，请先重新选择原文件。", "spk.busy": "文件正在处理，请在完成或暂停后再分析。", "sec.audio": "收音", "set.audioHint": "除最后三项系统选项需停止后重新开始收音外，其余设置在点击“完成”后立即生效；麦克风切换立即生效。",
-    "set.gain": "麦克风增益", "opt.gainAuto": "自动", "opt.gain1": "不放大", "set.gainHint": "默认为自动，底部信息栏会显示当前放大倍数。距离声源较远且没有字幕输出时，请先确认信息栏左侧的信号格是否有变化。",
-    "set.maxGain": "自动增益上限", "set.agcTarget": "自动增益目标响度", "set.vad": "识别灵敏度", "set.silence": "断句静音时长", "set.maxTurn": "单句最长时长", "set.prefix": "句首保留时长",
-    "set.nr": "云端降噪", "opt.far": "远场", "opt.near": "近场", "opt.off": "关闭", "set.nrHint": "默认关闭，保留原始声音。环境嘈杂、离声源较远时可选择远场；贴近扬声器或使用耳机麦克风时可选择近场。",
-    "set.micAgc": "系统自动增益", "set.micNs": "系统降噪", "set.micEc": "系统回声消除", "set.micHint": "系统降噪可能将远处的人声当作噪声消除；回声消除通常无需开启。", "set.resetAudio": "恢复默认收音设置",
-    "v.maxGain": "默认 40 倍。自动增益最多把声音放大到这个倍数。", "v.agcTarget": "默认 14。没有字幕输出时请调高；底噪被误识别时请调低。",
-    "v.vad": "默认 " + VAD + "。数值越小越灵敏。声音较小时请调低；掌声或笑声造成误触发时请调高。", "v.maxTurn": "默认 8 秒。仅适用于 gpt-transcribe，在持续噪声或背景音乐下到时强制断句。字幕过碎时请调高。",
-    "v.prefix": "默认 300 毫秒。句首被截断时请调高。", "v.silence": "默认 600 毫秒。对话交替频繁时请调低；字幕过碎时请调高。",
-    "sec.display": "显示", "set.showSrc": "显示原文", "set.fontSize": "译文字号",
-    "sec.records": "字幕记录", "rec.copy": "复制全部字幕", "rec.save": "下载字幕", "rec.clear": "清空记录", "rec.clearSure": "再次点击以确认清空",
-    "rec.copied": "已复制", "rec.copyFail": "复制失败，请使用下载", "rec.resetCost": "费用清零", "rec.costCleared": "已清零",
-    "rec.memo": "翻译记忆 · {n} 条", "rec.memoHint": "翻译时模型会把对后续翻译有用的信息(谁在场、当前话题、昵称、某个词指什么等)记在这里,之后每次翻译都会参考;过时或有误的会自行删掉。按会话保存,最多 30 条。", "rec.memoEmpty": "还没有记录。", "rec.memoClear": "清空记忆", "rec.memoCleared": "已清空", "rec.recap": "生成摘要", "rec.recapBusy": "正在生成摘要，内容较多时可能需要一至两分钟。", "rec.recapEmpty": "暂无字幕记录。", "rec.recapFail": "摘要生成失败：", "rec.recapPart": "记录较长，正在分段整理：第 {i} / {n} 段……", "rec.recapMerge": "正在把 {n} 段合并成摘要……",
-    "sec.adv": "高级", "set.apiBase": "API 地址", "set.ver": "版本 {v}",
-    "tpl.blank": "通用模板", "tpl.blankDesc": "",
-  },
-  en: {
-    "app": "Live Translate", "hdr.home": "Templates", "hdr.sessions": "Sessions", "hdr.settings": "Settings", "tpl.title": "Templates", "card.file": "Translate file", "sess.file": "File", "sess.live": "Live",
-    "file.start": "Start processing", "file.pause": "Pause", "file.resume": "Resume", "file.redo": "Process again", "file.redoSure": "Tap again to clear and reprocess", "file.reattach": "Select the original file",
-    "file.idle": "Duration {total}. Tap “Start processing” to transcribe and translate at {speed}× speed.", "file.loading": "Downloading the decoder {pct}% (about 32 MB, first time only)", "file.extract": "Extracting audio {pct}%",
-    "file.run": "Recognition {pct}% · {pos} / {total} · {speed}× · about {eta} left · translated {done}/{n}", "file.flush": "Finishing recognition and translation · translated {done}/{n}",
-    "file.paused": "Paused · processed {pos} / {total} · {n} lines", "file.done": "Done · duration {total} · {n} lines", "file.missing": "The original file is not stored on this device. Select the same file again to play or process it.",
-    "file.err": "Processing stopped: {m}. Tap “Resume” to continue from where it stopped.", "file.noStore": "The file is too large to store in this browser; you will need to select it again after reloading.", "file.asrNote": "File translation always uses gpt-transcribe for accurate timestamps.",
-    "status.processing": "Processing", "status.paused": "Paused", "status.done": "Done",
-    "home.sessIntro": "Each translation is a session that keeps its own template, languages, settings and transcript, so you can come back and continue at any time.", "home.newSession": "New translation",
-    "home.noSessions": "No sessions yet. Tap “New translation” and choose a template to begin.",
-    "sess.continue": "Continue", "sess.rename": "Rename", "sess.export": "Export transcript", "sess.del": "Delete", "sess.delSure": "Tap again to confirm",
-    "sess.meta": "{tpl} · {src} → {tgt}", "sess.when": "{time} · {n} lines", "sess.tplMissing": "Template deleted",
-    "set.sessChip": "Session", "set.sessCur": "Current session: {name}", "set.sessNone": "No session yet. Settings marked “Session” below will be used as defaults for new sessions.",
-    "status.idle": "Idle", "status.connecting": "Connecting", "status.listening": "Listening", "status.reconnect": "Connection lost, reconnecting", "status.keyBad": "Invalid API key",
-    "status.https": "HTTPS required", "status.noMic": "Microphone access denied", "status.stopped": "Stopped", "status.tapFix": ". Tap the screen to resume", "status.micCant": "Microphone unavailable. Stop and start again",
-    "mic.ended": "Microphone disconnected", "mic.muted": "Microphone paused by the system", "mic.ctx": "Audio processing stopped", "mic.nodata": "No audio received",
-    "home.intro": "Select a template to start a new translation session. A template provides background information, translation style and a glossary, giving speech recognition and translation the context they need for higher accuracy.",
-    "home.noKey": "No OpenAI API key is configured. Please add one in Settings.",
-    "home.new": "New template", "home.import": "Import template", "home.importFail": "Import failed: the file is not a valid template.",
-    "card.open": "Start", "card.edit": "Edit", "card.dup": "Duplicate", "card.export": "Export", "card.del": "Delete", "card.delSure": "Tap again to confirm",
-    "card.reset": "Restore built-in version", "card.builtin": "Built-in", "card.modified": "Modified", "card.current": "In use",
-    "card.meta": "{src} → {tgt} · {p} speakers · {n} terms", "card.copy": " copy",
-    "live.start": "Start listening", "live.stop": "Stop listening", "live.follow": "Auto-scroll", "live.unfollow": "Jump to latest",
-    "live.empty": "Tap “Start listening” below. Point the device toward the sound source and keep the screen on.", "live.emptyKey": "Add an OpenAI API key in Settings, then tap “Start listening” below.",
-    "line.translating": "Translating…", "line.noise": "No speech detected", "line.failed": "Translation failed", "line.unfinished": "Not translated before the page was reloaded", "line.sep": "{n} earlier lines above",
-    "lat.stream": "streaming", "ib.gain": "Gain", "ib.asr": "ASR", "ib.mt": "Translation", "ib.avg": "Avg", "ib.queue": "Queued", "ib.lines": "Lines", "ib.noise": "Noise", "ib.err": "Errors", "ib.cost": "Spend", "ib.level": "Input level", "ib.deltas": "{n} recognition segments received", "sec": "{s}s",
-    "cost": "Estimated spend: recognition {a}, translation and templates {m}, total {t}. Based on list prices and actual usage (requests the server sends through a ChatGPT subscription are not counted), for this device only; kept across reloads.",
-    "flash.storage": "Browser storage is full, so subtitles could not be saved. Delete old sessions you no longer need.", "flash.storageOff": "Browser storage is disabled, so subtitles are not saved and will be lost when the page reloads.", "flash.mt": "Translation failed: ", "flash.timeout": "request timed out", "flash.asr": "Recognition error: ", "flash.mic": "Unable to open the microphone: ", "flash.https": "This page must be served over HTTPS to use the microphone.",
-    "create.titleNew": "New template", "create.titleEdit": "Edit template", "create.tabChat": "Chat", "create.tabDraft": "Draft · {n} entries",
-    "create.placeholder": "Describe the occasion: the event, course or meeting name, date, speakers or lecturers, official links, and words likely to be misheard.",
-    "create.send": "Send", "create.attach": "Attach", "create.attachRemove": "Remove", "create.attachTooBig": "Attachments cannot exceed {m} MB in total.", "create.attachRead": "Unable to read file: {name}", "create.attachOnly": "Please read the attachments and refine the template accordingly.", "create.thinking": "{st}, {s}s elapsed", "create.stStart": "Analyzing the request", "create.stSearch": "Searching the web, query {n}", "create.stSearched": "Searched: {q}", "create.stWriting": "Writing the reply", "create.stDraft": "Building the template, {n} entries so far", "create.err": "Error: {m}",
-    "create.welcome": "Describe the occasion you need to translate, such as an event, program, meeting, lecture or match. The more specific, the better: name, date, speakers or attendees, official links and words likely to be misheard. You can also paste reference material or attach files such as slides, papers, handouts or scripts.\n\nI will search the web and organize the background, translation style, speakers and glossary into the template draft. On a phone, switch to the Draft tab to view it. You can edit the draft at any time and ask me to refine it further.",
-    "create.welcomeEdit": "Editing “{name}”. You can ask me to extend the glossary, for example “add today's guests and segment names”, adjust the translation style, or edit the draft directly.",
-    "create.updated": "Draft updated: {p} speakers, {n} terms.", "create.noKey": "Please add an OpenAI API key in Settings first.",
-    "draft.name": "Template name", "draft.source": "Source language", "draft.target": "Target language",
-    "draft.desc": "Background", "draft.descHint": "Context for the translation model, such as the occasion, participants and their relationships.",
-    "draft.style": "Translation style", "draft.styleHint": "Specific requirements for the translation, such as forms of address, tone and fixed renderings.",
-    "draft.spkNotes": "Speaker cues", "draft.spkNotesHint": "Helps tell speakers apart: how each person introduces themselves, what they call themselves and others, who hosts, verbal habits, and the usual line-up. Used only for speaker identification, not for translation.",
-    "draft.asr": "Speech recognition hint", "draft.asrHint": "One or two sentences in the source language describing the audio. Speakers and glossary are appended automatically.",
-    "draft.gloss": "Speakers and glossary: {p} speakers, {n} terms", "draft.glossHint": "One entry per line: original | reading | translation | notes. Lines beginning with @ are speakers; lines beginning with # are comments. Recognition uses the original spelling; translation uses the given rendering.",
-    "draft.editText": "Edit as text", "draft.viewTable": "Table view", "draft.save": "Save", "draft.saveStart": "Save and start", "draft.discard": "Discard",
-    "draft.needName": "Please enter a template name", "draft.discardSure": "Tap again to confirm", "draft.speaker": "Speaker",
-    "g.src": "Original", "g.reading": "Reading", "g.tgt": "Translation", "g.notes": "Notes",
-    "set.title": "Settings", "set.done": "Done", "sec.general": "General", "set.uiLang": "Interface language", "set.apiKey": "OpenAI API key",
-    "set.keyHint": "Optional. If left blank, requests are relayed through this site's server using its configured key, which never appears in the page. If you enter a key, the page connects to OpenAI directly and the key is stored only in this browser.",
-    "set.keyHintByok": "The key is stored only in this browser. The page connects to OpenAI directly without going through any server.",
-    "sec.lang": "Languages", "set.langHint": "Applies to the current session only and does not change the template. Takes effect when you tap Done.", "set.editTpl": "Edit current template", "set.curTpl": "Current template: {name}",
-    "sec.models": "Models", "set.asrModel": "Speech recognition model", "set.mtModel": "Translation model", "set.effort": "Translation reasoning effort", "set.ctModel": "Template creation model", "set.ctModelHint": "Also used for speaker identification and summaries.",
-    "ctDesc.gpt-6.1-sol": "Default. Used when creating templates with GPT; good results for web research and glossary building.",
-    "ctDesc.gpt-6-luna": "About one tenth the cost of gpt-6.1-sol; research may be less thorough.",
-    "asrDesc.gpt-transcribe": "Sentence-by-sentence recognition with high accuracy; the glossary is used as keywords. About a quarter of the cost of gpt-live-transcribe.",
-    "asrDesc.gpt-live-transcribe": "Default. Streaming recognition that transcribes as you listen, with low latency; supports the glossary.",
-    "mtDesc.gpt-6.1-sol": "Most accurate; average latency about 2.7 seconds, about ten times the cost of gpt-6-luna.",
-    "mtDesc.gpt-6-luna": "Default. About one tenth the cost of gpt-6.1-sol, with slightly weaker handling of detail.",
-    "opt.effortNone": "Not set", "opt.effortMinimal": "Minimal", "opt.effortLow": "Low", "opt.effortMedium": "Medium", "opt.effortHigh": "High",
-    "set.effortHint": "Default is Medium. Higher effort makes translation slower. Choose Not set for non-reasoning models.",
-    "set.micDev": "Microphone", "opt.micDefault": "System default", "opt.micN": "Microphone {n}", "opt.micMissing": "Previously selected microphone (not connected)", "set.micDevHint": "Switching while listening takes effect immediately.", "set.micDevNoLabel": "Device names appear here after you start listening and allow microphone access.", "flash.micFallback": "The selected microphone is unavailable; using the system default instead.", "u.x": "{v}×", "u.ms": "{v} ms", "u.s": "{v} s", "u.px": "{v} px", "u.pct": "{v}%",
-    "spk.btn": "Speakers", "spk.title": "Speaker identification", "spk.beta": "Experimental", "spk.close": "Close",
-   
-   
-   
-   
-   
-    "spk.judging": "GPT is identifying speakers in {n} lines, {s}s so far (usually under a minute per episode)…", "spk.judged": "{n} lines were decided by GPT from context (dashed tags).",
-   
-    "spk.by.self_intro": "GPT: self-introduction", "spk.by.addressed": "GPT: answers when addressed", "spk.by.turn_taking": "GPT: turn-taking", "spk.by.content": "GPT: content and speaking habits", "spk.by.voice": "GPT: voice", "spk.by.unknown": "GPT",
-    "sec.spk": "Speakers", "spk.settings": "Speaker settings", "spk.on": "Identify speakers", "spk.onHint": "When on, each subtitle line is tagged with who said it: voices are first analyzed and grouped on this device (the first run downloads about 40 MB, no API usage), then GPT uses the subtitles and the current template's people and speaker cues to work out who each group is and fill in uncertain lines (uses the API, a few cents per episode). Runs automatically when a file finishes processing, or right away for files that are already done. Results appear in the subtitles, on the video and in exported files; turning this off hides them without deleting them.", "spk.introOff": "Speaker identification is off. Turn it on to tag each subtitle line with who said it.", "spk.introOn": "These are the voice groups and the names identified. Rename a group if it is wrong, then tap Identify again and GPT will re-check using your names; give several groups the same name to merge them. Tap Listen to hear a typical clip of a group.", "spk.enable": "Turn on speaker identification", "spk.start": "Identify speakers", "spk.rerun": "Identify again", "spk.none": "Not identified yet. Tap Identify speakers.", "spk.wait": "Identification starts automatically when the file finishes processing.", "spk.needKey": "GPT identification needs an API key. Add one in Settings first.", "spk.done": "{k} groups; {a} of {b} lines tagged.", "file.spk": "Subtitles done · Speakers: {m}", "spk.confirm": "Before turning this on: the first run downloads about 40 MB of voice-analysis components (cached by the browser afterwards), so Wi-Fi is recommended. Each file also makes one GPT request, billed to your API key, about a few cents per episode.", "spk.confirmOk": "Turn on", "spk.confirmNo": "Not now", "spk.saveVoices": "Save these voices to the template", "spk.saveVoicesHint": "Save after checking the group names. Files processed later with the same template are matched against these voices to recognize people. Only voice features are stored (about 1 KB per person), no audio; voices with the same name are merged.", "spk.saved": "Saved to the template: {names}", "spk.lib": "Template voice library: {names}", "spk.libNone": "Template voice library: empty", "spk.libMatch": "sounds like {name} (library)", "spk.clearVoices": "Clear voice library", "spk.clearVoicesSure": "Tap again to clear", "spk.n": "Speaker {n}", "spk.unsure": "Uncertain", "spk.play": "Listen", "spk.meta": "{dur} · {n} clips",
-    "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Re-extracting the audio track…", "spk.embed": "Analyzing voices {i} / {n} clips",
-   
-    "spk.err": "Analysis failed: {m}", "spk.needMedia": "The original file is required. Select it again first.", "spk.busy": "The file is being processed. Analyze after it finishes or is paused.", "sec.audio": "Audio capture", "set.audioHint": "All settings take effect when you tap Done, except the last three system options, which require stopping and restarting. Microphone changes apply immediately.",
-    "set.gain": "Microphone gain", "opt.gainAuto": "Automatic", "opt.gain1": "No amplification", "set.gainHint": "Default is Automatic; the info bar at the bottom shows the current gain. If no subtitles appear far from the source, first check that the signal bars on the left of the info bar are moving.",
-    "set.maxGain": "Automatic gain limit", "set.agcTarget": "Automatic gain target level", "set.vad": "Recognition sensitivity", "set.silence": "Silence before sentence break", "set.maxTurn": "Maximum sentence duration", "set.prefix": "Leading audio retained",
-    "set.nr": "Cloud noise reduction", "opt.far": "Far field", "opt.near": "Near field", "opt.off": "Off", "set.nrHint": "Off by default to keep the original audio. Choose Far field in noisy settings away from the source, or Near field when close to a speaker or using a headset microphone.",
-    "set.micAgc": "System automatic gain", "set.micNs": "System noise suppression", "set.micEc": "System echo cancellation", "set.micHint": "System noise suppression may remove distant voices; echo cancellation is usually unnecessary.", "set.resetAudio": "Restore default audio settings",
-    "v.maxGain": "Default 40×. Automatic gain never amplifies beyond this.", "v.agcTarget": "Default 14. Raise it if no subtitles appear; lower it if background noise is transcribed.",
-    "v.vad": "Default " + VAD + ". Lower values are more sensitive. Lower it for quiet audio; raise it if applause or laughter triggers recognition.", "v.maxTurn": "Default 8s. Applies to gpt-transcribe only; forces a break under continuous noise or music. Raise it if subtitles are too fragmented.",
-    "v.prefix": "Default 300 ms. Raise it if the beginnings of sentences are cut off.", "v.silence": "Default 600 ms. Lower it for rapid exchanges; raise it if subtitles are too fragmented.",
-    "sec.display": "Display", "set.showSrc": "Show original text", "set.fontSize": "Subtitle size",
-    "sec.records": "Transcript", "rec.copy": "Copy all subtitles", "rec.save": "Download subtitles", "rec.clear": "Clear transcript", "rec.clearSure": "Tap again to confirm",
-    "rec.copied": "Copied", "rec.copyFail": "Copy failed. Please use Download", "rec.resetCost": "Reset spend", "rec.costCleared": "Reset complete",
-    "rec.memo": "Translation memory · {n}", "rec.memoHint": "While translating, the model notes things useful for later lines here (who is present, the current topic, nicknames, what a term refers to, etc.) and uses them in every following translation; outdated or wrong notes are removed by the model. Saved per session, up to 30 notes.", "rec.memoEmpty": "Nothing noted yet.", "rec.memoClear": "Clear memory", "rec.memoCleared": "Cleared", "rec.recap": "Generate summary", "rec.recapBusy": "Generating summary. This may take a minute or two for long transcripts.", "rec.recapEmpty": "No subtitles recorded yet.", "rec.recapFail": "Summary failed: ", "rec.recapPart": "The log is long; summarizing in parts: part {i} of {n}…", "rec.recapMerge": "Merging {n} parts into the summary…",
-    "sec.adv": "Advanced", "set.apiBase": "API base URL", "set.ver": "Version {v}",
-    "tpl.blank": "General", "tpl.blankDesc": "",
-  },
-};
-let uiLang = store.get("uiLang", /^zh/i.test(navigator.language || "") ? "zh" : "en");
-function t(key, vars = {}) { const s = (I18N[uiLang] && I18N[uiLang][key]) ?? I18N.zh[key] ?? key; return s.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? ""); }
+setUiLang(store.get("uiLang", /^zh/i.test(navigator.language || "") ? "zh" : "en"));
 function applyI18n() {
-  document.documentElement.lang = uiLang === "zh" ? "zh-CN" : "en";
+  document.documentElement.lang = getUiLang() === "zh" ? "zh-CN" : "en";
   document.title = t("app");
   document.querySelectorAll("[data-i18n]").forEach((n) => (n.textContent = t(!SERVER_API && n.dataset.i18n === "set.keyHint" ? "set.keyHintByok" : n.dataset.i18n)));
   document.querySelectorAll("[data-i18n-ph]").forEach((n) => (n.placeholder = t(n.dataset.i18nPh)));
@@ -246,23 +66,10 @@ function applyI18n() {
   $("#buildVer").textContent = t("set.ver", { v: BUILD });
 }
 
-// 语言:识别语言(ASR 的 language 参数)和翻译目标语言
-const LANGS = {
-  ja: { zh: "日语", en: "Japanese", asr: "ja" }, zh: { zh: "中文", en: "Chinese", asr: "zh" }, en: { zh: "英语", en: "English", asr: "en" },
-  ko: { zh: "韩语", en: "Korean", asr: "ko" }, fr: { zh: "法语", en: "French", asr: "fr" }, de: { zh: "德语", en: "German", asr: "de" },
-  es: { zh: "西班牙语", en: "Spanish", asr: "es" }, auto: { zh: "自动检测", en: "Auto-detect", asr: null },
-};
-const TARGETS = {
-  "zh-Hans": { zh: "简体中文", en: "Simplified Chinese" }, "zh-Hant": { zh: "繁體中文", en: "Traditional Chinese" }, en: { zh: "英语", en: "English" },
-  ja: { zh: "日语", en: "Japanese" }, ko: { zh: "韩语", en: "Korean" }, fr: { zh: "法语", en: "French" }, de: { zh: "德语", en: "German" }, es: { zh: "西班牙语", en: "Spanish" },
-};
-const srcName = (c, l = uiLang) => (LANGS[c] || LANGS.auto)[l];
-const tgtName = (c, l = uiLang) => (TARGETS[c] || TARGETS["zh-Hans"])[l];
 function fillLangSelects() {
   document.querySelectorAll("select.srcLangs").forEach((s) => { const v = s.value; s.replaceChildren(...Object.keys(LANGS).map((c) => el("option", { value: c, textContent: srcName(c) }))); if (v) s.value = v; });
   document.querySelectorAll("select.tgtLangs").forEach((s) => { const v = s.value; s.replaceChildren(...Object.keys(TARGETS).map((c) => el("option", { value: c, textContent: tgtName(c) }))); if (v) s.value = v; });
 }
-const CJK = /[぀-ヿ㐀-鿿가-힯]/;
 
 // ---------- 模板 ----------
 // 模板 = { id, name, source, target, description, style, asrPrompt, glossary(文本) }
@@ -303,7 +110,7 @@ function sessSettings() { return curSess ? (curSess.settings ||= {}) : sessDefau
 function sget(k, d) { const v = sessSettings()[k]; return v == null ? d : String(v); }
 function sset(k, v) { const o = sessSettings(); if (v == null) delete o[k]; else o[k] = String(v); if (curSess) saveSessions(); else store.set("sessDefaults", JSON.stringify(sessDefaults)); }
 function sessTemplate(ss) { return ss && getTemplate(ss.tplId); }
-function fmtWhen(ms) { return new Date(ms).toLocaleString(uiLang === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+function fmtWhen(ms) { return new Date(ms).toLocaleString(getUiLang() === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
 function newSession(tplId) {
   const tp = getTemplate(tplId) || builtins()[0], now = Date.now();
   const ss = { id: "s" + now.toString(36) + Math.random().toString(36).slice(2, 6), name: tp.name + " · " + fmtWhen(now), tplId: tp.id, source: tp.source, target: tp.target,
@@ -371,7 +178,7 @@ function loadSettings() {
   $("#secSpk").hidden = !isFileSess();
   $("#spkOn").checked = spkOn();
   document.body.classList.toggle("nospk", !spkOn());
-  $("#uiLang").value = uiLang;
+  $("#uiLang").value = getUiLang();
   $("#apiKey").value = store.get("apiKey", "");
   $("#asrModel").value = sget("asrModel", ASR_MODEL);
   $("#mtModel").value = sget("mtModel", MT_MODEL);
@@ -418,53 +225,6 @@ function applySettings() {
   saveAudioSettings();
   sset("showSrc", $("#showSrc").checked ? null : "0");
 }
-
-// ---------- 提示词 ----------
-function sep() { return CJK.test(cfg.tpl.asrPrompt || cfg.tpl.name) || ["ja", "zh"].includes(cfg.tpl.source) ? "、" : ", "; }
-function asrPrompt(maxChars = 900) {
-  const { people, terms } = cfg.glossary, s = sep();
-  let head = (cfg.tpl.asrPrompt || cfg.tpl.name || "").trim();
-  if (head && !/[。.!?！？]$/.test(head)) head += s === "、" ? "。" : ".";
-  if (people.length) head += (s === "、" ? "出演:" : " Speakers: ") + people.map((e) => e.src).join(s) + (s === "、" ? "。" : ".");
-  let words = "";
-  for (const x of terms) {
-    const next = words ? words + s + x.src : x.src;
-    if (head.length + next.length + 6 > maxChars) break;
-    words = next;
-  }
-  return head + (words ? (s === "、" ? "用語:" : " Terms: ") + words + (s === "、" ? "。" : ".") : "");
-}
-function keywords(limit = 300) { return [...new Set([...cfg.glossary.people, ...cfg.glossary.terms].map((e) => e.src))].slice(0, limit); }
-function glossaryForLLM() {
-  const fmt = (e) => "- " + [e.src, e.reading && "reading: " + e.reading, e.tgt && "translation: " + e.tgt, e.notes && "notes: " + e.notes].filter(Boolean).join(" | ");
-  const { people, terms } = cfg.glossary;
-  return [
-    cfg.tpl.description && "Background:\n" + cfg.tpl.description,
-    cfg.tpl.style && "Template-specific translation rules (follow these, they override the defaults above):\n" + cfg.tpl.style,
-    people.length && "Speakers (almost all speech comes from these people; when a name is misrecognized, prefer correcting to one of these):\n" + people.map(fmt).join("\n"),
-    terms.length && "Glossary / proper nouns:\n" + terms.map(fmt).join("\n"),
-  ].filter(Boolean).join("\n\n");
-}
-const SYSTEM = () => {
-  const src = cfg.tpl.source === "auto" ? "speech (language may vary)" : srcName(cfg.tpl.source, "en") + " speech", tgt = tgtName(cfg.tpl.target, "en");
-  return `You are a live subtitle translator. The input is real-time speech recognition (ASR) of ${src} from: ${cfg.tpl.name || "a live event"}. The audience needs ${tgt} subtitles.
-
-How to work:
-1. Fix the source text first: ASR often mishears names, titles and jargon as similar-sounding words and drops punctuation. If something sounds close to a glossary entry and the context fits, change it to the glossary spelling; if unsure, keep it. Never invent content. Laughter and filler can be trimmed. Put the corrected source text in "src".
-2. Translate into ${tgt} in "tgt": natural spoken style, concise, readable at a glance as a subtitle; keep the speaker's tone (teasing, surprise, etc.). Use the glossary translations for names and terms strictly; names with no translation stay in the original.
-3. One output item per input item, same id. Return empty "src" and "tgt" only when the input is pure noise, applause or music with no recognizable words. Far-field ASR is often fragmentary: if any meaning can be recovered, translate it, marking uncertain parts with "(?)".
-4. If a segment is already in ${tgt}, still return it in "tgt" (cleaned up).
-5. "Recent context" is only for understanding references and topics; do not translate it again.
-6. "Running notes" are facts you recorded earlier for translating later lines. Use them. In "memory", you may add notes that will help translate later lines and are not already covered by the glossary or notes: who is present or speaking, the current segment/topic, nicknames and how people address each other, what an ambiguous word or name refers to here, recurring jokes, how you resolved a mishearing. One short sentence each, written in English. Add nothing for ordinary lines (usually "add" is empty). Put in "drop" the numbers of notes that became outdated or turned out wrong.
-
-${glossaryForLLM()}`;
-};
-const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["items"],
-  properties: { items: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "src", "tgt"],
-    properties: { id: { type: "integer" }, src: { type: "string" }, tgt: { type: "string" } } } }, memory: MEMO_SCHEMA },
-};
-SCHEMA.required.push("memory");
 
 // ---------- 字幕列表 ----------
 const lines = [];          // {id, raw, src, tgt, t, el}
@@ -603,7 +363,7 @@ async function pumpTranslate() {
       headers: apiHeaders(),
       body: JSON.stringify({
         model: cfg.mtModel, ...effort(),
-        messages: [{ role: "system", content: SYSTEM() }, { role: "user", content: user }],
+        messages: [{ role: "system", content: SYSTEM(cfg, srcName(cfg.tpl.source, "en"), tgtName(cfg.tpl.target, "en")) }, { role: "user", content: user }],
         response_format: { type: "json_schema", json_schema: { name: "subtitles", strict: true, schema: SCHEMA } },
       }),
     });
@@ -659,9 +419,9 @@ function sessionConfig() {
   const lang = (LANGS[cfg.tpl.source] || LANGS.auto).asr;
   if (lang) transcription.language = lang;
   // 实测 gpt-transcribe:关键词 + 提示一起给最准(只给提示时节目名写成片假名,都不给时羊宮妃那听成陽空ひな)
-  const kw = keywords();
+  const kw = keywords(cfg.glossary);
   if ((cfg.asrModel === "gpt-live-transcribe" || cfg.asrModel === "gpt-transcribe") && kw.length) transcription.keywords = kw;
-  const prompt = asrPrompt();
+  const prompt = asrPrompt(cfg);
   if (cfg.asrModel !== "gpt-realtime-whisper" && prompt) transcription.prompt = prompt; // whisper 两个都不收
   return { type: "transcription", audio: { input: {
     format: { type: "audio/pcm", rate: 24000 },
@@ -705,7 +465,7 @@ const diag = { asr: 0, noise: 0, err: 0, deltas: 0 }; // 现场排障计数
 function fmtS(ms) { return ms ? t("sec", { s: (ms / 1000).toFixed(1) }) : "—"; }
 function showLat() {
   const asr = isStreamingAsr() ? t("lat.stream") : fmtS(lat.asr);
-  const gain = running && !micBroken ? agcGain.toFixed(agcGain < 10 ? 1 : 0) + "×" : "—";
+  const gain = running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
   const item = (k, v, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
   $("#ibItems").replaceChildren(...[
     isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
@@ -716,10 +476,7 @@ function showLat() {
   $("#infobar").title = t("ib.deltas", { n: diag.deltas }); $("#signal").title = t("ib.level");
   showCost();
 }
-// 费用估算(官方单价,美元)
-const ASR_PRICE_PER_MIN = { "gpt-live-transcribe": 0.017, "gpt-realtime-whisper": 0.017, "gpt-transcribe": 0.0045, "gpt-4o-transcribe": 0.006, "gpt-4o-mini-transcribe": 0.003 };
-const MT_PRICE = { "gpt-6-sol": [2.0, 0.2, 10.0], "gpt-6.1-sol": [2.0, 0.1, 10.0], "gpt-6-luna": [0.1, 0.01, 0.5] }; // 输入 / 缓存输入 / 输出
-const WEB_SEARCH_PER_CALL = 0.01;
+// 费用估算(单价和计算见 cost.ts)
 const cost = {
   asr: Number(store.get("costAsr", "0")) || 0, mt: Number(store.get("costMt", "0")) || 0,
   total() { return this.asr + this.mt; },
@@ -731,16 +488,13 @@ function showCost() {
   $("#costOut").textContent = t("cost", { a: usd(cost.asr), m: usd(cost.mt), t: usd(cost.total()) });
 }
 function addAsrCost(seconds, model = cfg.asrModel) {
-  cost.asr += (seconds / 60) * (ASR_PRICE_PER_MIN[model] || 0.017);
+  cost.asr += asrCost(seconds, model);
   if (performance.now() - costShownAt > 1000) { costShownAt = performance.now(); cost.save(); showLat(); }
 }
-// 兼容 Chat Completions(prompt_tokens)和 Responses(input_tokens)两种 usage
 function addMtCost(model, u, extra = 0) {
-  if (!u || u.billed_to === "chatgpt_subscription") return; // 服务器转发到 ChatGPT 订阅的请求不另计费
-  const [pin, pcache, pout] = MT_PRICE[model] || MT_PRICE["gpt-6-sol"];
-  const input = u.prompt_tokens ?? u.input_tokens ?? 0, output = u.completion_tokens ?? u.output_tokens ?? 0;
-  const cached = (u.prompt_tokens_details || u.input_tokens_details || {}).cached_tokens || 0;
-  cost.mt += ((input - cached) * pin + cached * pcache + output * pout) / 1e6 + extra;
+  const usd = mtCost(model, u, extra);
+  if (usd === null) return; // 没有 usage 或 ChatGPT 订阅:不计费
+  cost.mt += usd;
   cost.save(); showLat();
 }
 setInterval(() => {
@@ -800,76 +554,35 @@ function setStatus(key, kind, extra = "") { statusKey = key; statusKind = kind |
 
 // ---------- 麦克风 → 24 kHz PCM16 ----------
 let stream = null, actx = null, tap = null, wakeLock = null;
-let carry = new Float32Array(0), resamplePos = 0, prevSample = 0;
-const CHUNK = 2400; // 100 ms @ 24 kHz
-function toBase64(int16) {
-  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength); // 可能是大数组的切片
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-}
-// 数字增益:离声源远、收音小声时放大。自动模式跟踪语音电平,放大到目标电平(最多 cfg.maxGain 倍)
-let agcLevel = 0.01, agcGain = 1, gainShownAt = 0;
+let rs = null, agc = new Agc(), gainShownAt = 0;
+// 数字增益:离声源远、收音小声时放大(见 audio.ts);信息栏上的倍数每秒最多刷新一次
 function applyGain(x) {
-  if (!x.length) return x;
-  let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
-  rms = Math.sqrt(rms / x.length) + 1e-9;
-  let want;
-  if (cfg.gain === "auto") {
-    // 有声时较快跟上,安静时慢慢回落,免得把底噪放大到满格
-    agcLevel = rms > agcLevel * 0.5 ? agcLevel * 0.997 + rms * 0.003 : agcLevel * 0.9995 + rms * 0.0005;
-    want = Math.min(cfg.maxGain, Math.max(1, cfg.agcTarget / agcLevel));
-  } else want = Number(cfg.gain) || 1;
-  agcGain = agcGain * 0.99 + want * 0.01;
-  if (running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
-  if (agcGain === 1) return x;
-  const y = new Float32Array(x.length);
-  for (let i = 0; i < x.length; i++) y[i] = Math.max(-1, Math.min(1, x[i] * agcGain));
-  return y;
+  x = agc.apply(x, cfg.gain, cfg.maxGain, cfg.agcTarget);
+  if (x.length && running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
+  return x;
 }
 // 信号格:放大后的音量分 5 格,只在格数变化时改 DOM
-const SIG_STEPS = [0.03, 0.1, 0.22, 0.4, 0.7];
 function setSignal(v) {
-  const n = SIG_STEPS.filter((x) => v >= x).length, s = $("#signal");
+  const n = sigStep(v), s = $("#signal");
   if (s.dataset.level !== String(n)) s.dataset.level = n;
 }
 let lastSampleAt = 0;
 function onSamples(input) {
   if (!actx) return; // 停止后 worklet 可能还有一条消息在路上
   lastSampleAt = performance.now();
-  // 线性重采样到 24 kHz(AudioContext 拿不到 24 kHz 时才用到)
-  let x = input;
-  if (actx.sampleRate !== 24000) {
-    const ratio = actx.sampleRate / 24000, out = [];
-    // resamplePos 可能落在 [-1, 0):用上一块的最后一个样本插值(原先读 input[-1] 得到 NaN)
-    while (resamplePos < input.length - 1) {
-      const i = Math.floor(resamplePos), f = resamplePos - i;
-      out.push((i < 0 ? prevSample : input[i]) * (1 - f) + input[i + 1] * f);
-      resamplePos += ratio;
-    }
-    resamplePos -= input.length;
-    prevSample = input[input.length - 1];
-    x = Float32Array.from(out);
-  }
+  let x = rs.resample(input);
   x = applyGain(x);
   let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
   setSignal(Math.sqrt(rms / (x.length || 1)) * 4);
-  const merged = new Float32Array(carry.length + x.length);
-  merged.set(carry); merged.set(x, carry.length);
-  let off = 0;
-  while (merged.length - off >= CHUNK) {
-    const pcm = new Int16Array(CHUNK);
-    for (let i = 0; i < CHUNK; i++) { const v = Math.max(-1, Math.min(1, merged[off + i])); pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff; }
-    off += CHUNK;
+  for (const pcm of rs.chunk(x)) {
     if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
   }
-  carry = merged.slice(off);
 }
 async function startMic() {
   // iOS Safari:AudioContext 要在点击的同步阶段建好并 resume(await 之后就不算用户手势了);
   // 也不能指定 24 kHz(和硬件采样率不一致时麦克风只出静音),统一用默认采样率再在 JS 里重采样
   const Ctx = window.AudioContext || window.webkitAudioContext;
-  actx = new Ctx();
+  actx = new Ctx(); rs = new Resampler(actx.sampleRate);
   const resumed = actx.resume().catch(() => {});
   const want = { channelCount: 1, ...cfg.mic };
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: cfg.micId ? { ...want, deviceId: { exact: cfg.micId } } : want }); }
@@ -911,7 +624,7 @@ function stop() {
   if (ws) { try { ws.close(); } catch {} ws = null; }
   if (stream) stream.getTracks().forEach((x) => x.stop());
   if (actx) actx.close();
-  stream = actx = tap = null; carry = new Float32Array(0); resamplePos = 0; agcLevel = 0.01; agcGain = 1;
+  stream = actx = tap = rs = null; agc = new Agc();
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   $("#go").textContent = t("live.start"); $("#go").classList.remove("stop");
   setSignal(0); showLat();
@@ -949,7 +662,7 @@ async function restartMic() {
   try {
     if (stream) stream.getTracks().forEach((x) => x.stop());
     if (actx) actx.close().catch(() => {});
-    stream = actx = tap = null; carry = new Float32Array(0); resamplePos = 0; prevSample = 0;
+    stream = actx = tap = rs = null;
     await startMic();
     lastSampleAt = performance.now();
   } catch (e) {
@@ -990,39 +703,6 @@ function setLineTime(line, s, e) {
   line.ms = s; line.endMs = e; line.t = new Date(MEDIA_BASE + e);
   if (!line.el.querySelector(".tm")) line.el.prepend(el("div", { className: "tm", textContent: fmtClock(s) }));
 }
-// 原文件存在浏览器 IndexedDB,刷新后还能播放、续处理
-const idb = {
-  db: null,
-  open() { return (this.db ||= new Promise((ok, bad) => { const r = indexedDB.open("jls", 1); r.onupgradeneeded = () => r.result.createObjectStore("files"); r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error); })); },
-  async run(mode, fn) { const db = await this.open(); return new Promise((ok, bad) => { const tx = db.transaction("files", mode); const rq = fn(tx.objectStore("files")); tx.oncomplete = () => ok(rq.result); tx.onerror = () => bad(tx.error); tx.onabort = () => bad(tx.error); }); },
-  put(k, v) { return this.run("readwrite", (st) => st.put(v, k)); },
-  get(k) { return this.run("readonly", (st) => st.get(k)); },
-  del(k) { return this.run("readwrite", (st) => st.delete(k)); },
-  async entries(prefix) {
-    const db = await this.open();
-    return new Promise((ok, bad) => {
-      const tx = db.transaction("files", "readonly"), st = tx.objectStore("files"), range = IDBKeyRange.bound(prefix, prefix + "\uffff");
-      const ks = st.getAllKeys(range), vs = st.getAll(range);
-      tx.oncomplete = () => ok(ks.result.map((k, i) => [k, vs.result[i]])); tx.onerror = () => bad(tx.error);
-    });
-  },
-};
-// IndexedDB 不可用(个别隐私模式)时退回 localStorage,和以前一样
-const lsKV = {
-  async entries(prefix) {
-    const out = [];
-    for (const k of Object.keys(localStorage)) if (k.startsWith("jls." + prefix)) { try { out.push([k.slice(4), JSON.parse(localStorage.getItem(k))]); } catch {} }
-    return out;
-  },
-  async put(k, v) { localStorage.setItem("jls." + k, JSON.stringify(v)); },
-  async del(k) { localStorage.removeItem("jls." + k); },
-};
-// 两种存储都被禁用(例如 Safari「阻止所有 Cookie」):不持久化,页面照常能用
-const noKV = {
-  async entries() { return []; },
-  async put() { throw new DOMException("storage unavailable", "SecurityError"); },
-  async del() {},
-};
 let lineStore = new LineStore(noKV, storageFailed);
 async function loadLineStore() {
   for (const [kv, name] of [[idb, "IndexedDB"], [lsKV, "localStorage"]]) {
@@ -1105,40 +785,12 @@ $("#player").ontimeupdate = () => {
   else if (!cur && prev) prev.classList.remove("active");
 };
 function seekTo(ms) { const p = $("#player"); if (!p.src) return; spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
-// ffmpeg.wasm 核心(约 32 MB)随页面同源发布,首次用到时才加载,之后走浏览器缓存
-let ffmpegP = null;
-// 带进度下载(用于 32 MB 的 ffmpeg 核心和 28 MB 的声纹模型);已缓存时很快走完
-async function fetchProgress(url, onPct, guess) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url.split("/").pop()} ${res.status}`);
-  const total = Number(res.headers.get("content-length")) || guess, rd = res.body.getReader(), parts = []; let got = 0;
-  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; onPct && onPct(Math.min(1, got / total)); }
-  const buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
-  return buf;
-}
-function loadFfmpeg(onPct) {
-  return (ffmpegP ||= (async () => {
-    const ff = new FFmpeg();
-    const wasm = URL.createObjectURL(new Blob([await fetchProgress(new URL(ffmpegWasm, location.href).href, onPct, 32232419)], { type: "application/wasm" }));
-    try { await ff.load({ coreURL: new URL(ffmpegCore, location.href).href, wasmURL: wasm }); } finally { URL.revokeObjectURL(wasm); }
-    return ff;
-  })().catch((e) => { ffmpegP = null; throw e; }));
-}
-async function extractPcm(blob) {
-  fileJob.phase = "loading"; fileJob.loadPct = 0; fileProgress();
-  const ff = await loadFfmpeg((p) => { fileJob.loadPct = p; fileProgress(); });
-  fileJob.phase = "extract"; fileJob.extractPct = 0; fileProgress();
-  const onP = ({ progress }) => { fileJob.extractPct = Math.max(0, Math.min(1, progress || 0)); fileProgress(); };
-  ff.on("progress", onP);
-  try {
-    await ff.createDir("/in").catch(() => {});
-    await ff.mount("WORKERFS", { blobs: [{ name: "input", data: blob }] }, "/in");
-    const rc = await ff.exec(["-i", "/in/input", "-vn", "-ac", "1", "-ar", "24000", "-f", "s16le", "/out.pcm"]);
-    if (rc !== 0) throw new Error("ffmpeg " + rc);
-    const d = await ff.readFile("/out.pcm"); await ff.deleteFile("/out.pcm").catch(() => {});
-    return new Int16Array(d.buffer, d.byteOffset, d.byteLength >> 1);
-  } finally { ff.off("progress", onP); await ff.unmount("/in").catch(() => {}); }
-}
+// extractPcm 的进度写进 fileJob,和文件翻译进度条共用
+const pcmCb = {
+  onPhase(ph) { fileJob.phase = ph; if (ph === "loading") fileJob.loadPct = 0; else fileJob.extractPct = 0; fileProgress(); },
+  onLoad(p) { fileJob.loadPct = p; fileProgress(); },
+  onExtract(p) { fileJob.extractPct = p; fileProgress(); },
+};
 // 按说话人断句时停顿 0.3 秒就断句(快速接话时换人处更容易断开),识别费用不变
 function fileConfig() {
   const keep = [cfg.asrModel, cfg.silence]; cfg.asrModel = "gpt-transcribe"; cfg.silence = Math.min(cfg.silence, 300); // 短停顿就断句,便于区分说话人
@@ -1160,7 +812,7 @@ async function fileStart() {
   }
   fileJob.active = true; fileJob.err = ""; setGoFile(); setStatus("status.processing", "on"); keepAwake();
   try {
-    if (!fileJob.pcm) fileJob.pcm = await extractPcm(mediaBlob);
+    if (!fileJob.pcm) fileJob.pcm = await extractPcm(mediaBlob, pcmCb);
   } catch (e) { fileJob.active = false; fileJob.phase = "error"; fileJob.err = e.message; setGoFile(); fileProgress(); setStatus("status.paused", "err"); return; }
   if (!fileJob.active || curSess !== ss) return;
   fileJob.total = fileJob.pcm.length / 24; ss.file.duration = fileJob.total; saveSessions();
@@ -1226,17 +878,10 @@ function filePump(ws2, ss) {
 function emitTimed(text, s, e) {
   if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
   // 一段里有几句就拆开,时间按字数比例分
-  const re = ["ja", "zh"].includes(cfg.tpl.source) ? /[^。！？]+[。！？]+[」』）)]*|[^。！？]+$/g : /[^.!?]+(?:[.!?]+["')\]]*(?=\s|$))|[^.!?]+$/g;
-  const parts = (text.match(re) || [text]).map((x) => x.trim()).filter(Boolean);
-  const total = parts.reduce((a, x) => a + x.length, 0) || 1; let at = s;
-  for (const ptxt of parts) {
-    const d = (e - s) * ptxt.length / total;
-    if (/[^\s。、！？!?,.，「」『』()（）…]/.test(ptxt)) {
-      diag.asr++; const line = addLine(++nextId, ptxt); setLineTime(line, Math.round(at), Math.round(at + d)); queue.push(line);
-      const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms);
-      if (j >= 0) { lines.splice(lines.indexOf(line), 1); lines.splice(j, 0, line); lines[j + 1].el.before(line.el); }
-    }
-    at += d;
+  for (const p of splitTimed(text, s, e, ["ja", "zh"].includes(cfg.tpl.source))) {
+    diag.asr++; const line = addLine(++nextId, p.text); setLineTime(line, Math.round(p.s), Math.round(p.e)); queue.push(line);
+    const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms);
+    if (j >= 0) { lines.splice(lines.indexOf(line), 1); lines.splice(j, 0, line); lines[j + 1].el.before(line.el); }
   }
   pumpTranslate(); showLat(); saveLines();
 }
@@ -1346,7 +991,7 @@ async function spkAnalyze() {
     if (!fileJob.pcm) {
       spkBar(null); spkMsg(t("spk.extract"));
       const keep = fileJob.phase;
-      try { fileJob.pcm = await extractPcm(mediaBlob); } finally { fileJob.phase = keep; fileProgress(); }
+      try { fileJob.pcm = await extractPcm(mediaBlob, pcmCb); } finally { fileJob.phase = keep; fileProgress(); }
     }
     if (curSess !== ss) return;
     const pcm = fileJob.pcm, segs = spkSegments(pcm, 24000), n = segs.length, emb = new Float32Array(n * SPK_DIM);
@@ -1673,7 +1318,7 @@ const CREATOR_TURNS = 10;
 let creator = store.json("creator", null) || { editId: null, draft: null, msgs: [] };
 let creatorBusy = false, glossTextMode = false;
 function saveCreator() { store.set("creator", JSON.stringify(creator)); }
-function blankDraft() { return { name: "", source: "ja", target: uiLang === "zh" ? "zh-Hans" : "en", description: "", style: "", asrPrompt: "", spkNotes: "", glossary: "" }; }
+function blankDraft() { return { name: "", source: "ja", target: getUiLang() === "zh" ? "zh-Hans" : "en", description: "", style: "", asrPrompt: "", spkNotes: "", glossary: "" }; }
 function openCreator(tp) {
   const d = tp ? { name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "" } : blankDraft();
   creator = { editId: tp ? tp.id : null, draft: d, msgs: [{ role: "note", text: tp ? t("create.welcomeEdit", { name: tp.name }) : t("create.welcome") }] };
@@ -1767,7 +1412,7 @@ Rules:
   Only well-sourced facts (mark weak ones "unverified"); one short paragraph per speaker plus the format/ambiguity notes; empty string if nothing useful is known.
 - asrPrompt: one or two natural sentences in the SOURCE language describing the audio (e.g. "日本語のラジオ番組の公開イベントの音声。"). No lists; names are appended automatically.
 - name: short template name.
-- reply: a short message to the user written in ${uiLang === "zh" ? "Simplified Chinese" : "English"}: what you found or changed, key sources as plain URLs, and at most two questions. Plain text only, no Markdown. Do not repeat the whole glossary in reply.`;
+- reply: a short message to the user written in ${getUiLang() === "zh" ? "Simplified Chinese" : "English"}: what you found or changed, key sources as plain URLs, and at most two questions. Plain text only, no Markdown. Do not repeat the whole glossary in reply.`;
 function draftForGPT() {
   const d = creator.draft, g = parseGlossary(d.glossary);
   const ent = (e) => ({ text: e.src, reading: e.reading, translation: e.tgt, notes: e.notes });
@@ -1801,37 +1446,6 @@ function renderAttachments() {
 }
 $("#chatAttach").onclick = () => $("#attachFile").click();
 $("#attachFile").onchange = async (e) => { await addAttachments([...e.target.files]); e.target.value = ""; };
-// 读 Responses API 的 SSE 流,返回最终的 response 对象(和非流式时 res.json() 一样)
-async function readResponseStream(res, onEvent) {
-  const reader = res.body.getReader(), dec = new TextDecoder();
-  let pending = "", text = "", final = null;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    pending += dec.decode(value, { stream: true });
-    let i;
-    while ((i = pending.indexOf("\n\n")) >= 0) {
-      const chunk = pending.slice(0, i); pending = pending.slice(i + 2);
-      const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
-      if (!data || data === "[DONE]") continue;
-      let ev; try { ev = JSON.parse(data); } catch { continue; }
-      if (ev.type === "response.output_text.delta") text += ev.delta || "";
-      if (ev.type === "response.completed") final = ev.response;
-      if (ev.type === "response.failed" || ev.type === "response.incomplete") throw new Error((ev.response && ev.response.error && ev.response.error.message) || ev.type);
-      if (ev.type === "error") throw new Error(ev.message || (ev.error && ev.error.message) || "stream error");
-      try { onEvent(ev, text); } catch (e) { console.error(e); }
-    }
-  }
-  if (!final) throw new Error("stream ended early");
-  return final;
-}
-// 从还没收完的 JSON 里取出某个字符串字段已到达的部分
-function partialJsonString(buf, key) {
-  const m = buf.match(new RegExp('"' + key + '"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)'));
-  if (!m) return "";
-  let raw = m[1].replace(/\\(u[0-9a-fA-F]{0,3})?$/, "");
-  try { return JSON.parse('"' + raw + '"'); } catch { return ""; }
-}
 async function creatorSend() {
   const typed = $("#chatInput").value.trim();
   if ((!typed && !attachments.length) || creatorBusy) return;
@@ -1945,7 +1559,7 @@ $("#closeSettings").onclick = () => {
   if (view === "live") showEmptyHint();
 };
 $("#uiLang").onchange = () => {
-  uiLang = $("#uiLang").value; store.set("uiLang", uiLang);
+  setUiLang($("#uiLang").value); store.set("uiLang", getUiLang());
   applyI18n(); applySettings(); listMics(); setStatus(statusKey, statusKind, statusExtra); setFollow(follow); showLat();
   $("#go").textContent = t(running ? "live.stop" : "live.start");
   refreshTemplate(); if (view === "home") renderSessions(); if (view === "tpl") renderHome();
@@ -1985,7 +1599,7 @@ async function recapCall(prompt) {
   return rd.choices[0].message.content;
 }
 async function makeRecap(rows, onStep, budgetOverride = 0) {
-  const tgt = tgtName(cfg.tpl.target, "en"), ctx = glossaryForLLM();
+  const tgt = tgtName(cfg.tpl.target, "en"), ctx = glossaryForLLM(cfg);
   const intro = `a live subtitle log of "${cfg.tpl.name}" (ASR + live correction; may still contain recognition errors)`;
   const final = `Write in ${tgt}, plain text:\n1. Summary (about 300 words or 300 characters): what happened, segments, highlights and important announcements (events, merchandise, release dates — list dates exactly).\n2. Section by section: split by segment/topic, give each a short heading, and rewrite the content as clear, complete prose.\n3. Uncertain points: places where the ASR may have misheard or that cannot be determined.`;
   let budget = budgetOverride || Math.floor((CONTEXT[cfg.ctModel] || 128000) * 0.4) - estTokens(ctx) - 2000;
