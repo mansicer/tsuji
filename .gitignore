@@ -4,3 +4,5 @@ dist/
 .env.local
 public/models/
 .env.selfhost
+test-results/
+playwright-report/
