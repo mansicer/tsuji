@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # CAM++ 模型(28 MB)按 fetch-model.mjs 里的 sha256 缓存,脚本校验通过即跳过下载
+      - uses: actions/cache@v4
+        with:
+          path: public/models/campplus.onnx
+          key: campplus-${{ hashFiles('scripts/fetch-model.mjs') }}
+
+      - run: npm ci
+
+      - run: npm test
+
+      # fetch-model + tsc --noEmit + vite build
+      - run: npm run build
