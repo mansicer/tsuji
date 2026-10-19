@@ -57,30 +57,6 @@ npm run build      # output in dist/
 npm run e2e        # end-to-end tests in Chromium against dist/ (fake OpenAI, no API cost)
 ```
 
-Code layout:
-
-| Path | Contents |
-|---|---|
-| `index.html` | Page skeleton |
-| `src/main.ts` | Main application |
-| `src/storage.ts` | localStorage / IndexedDB primitives and storage-failure warning throttling |
-| `src/audio.ts` | Microphone signal processing: resampling to 24 kHz PCM16 chunks, digital gain / AGC, signal level steps |
-| `src/i18n.ts` | UI strings (zh / en), interface language, language names |
-| `src/spk/core.ts` | Speaker identification math: resampling, energy-based segmentation, Kaldi-compatible fbank, clustering, smoothing |
-| `src/spk/judge.ts` | GPT speaker judgment |
-| `src/memo.ts` | Translation memory notes |
-| `src/glossary.ts` | Glossary text format ↔ entries |
-| `src/subtitle.ts` | Timestamps and SRT / VTT export |
-| `src/tokens.ts` | Token estimates and splitting long logs for summaries |
-| `src/media.ts` | File translation helpers: download with progress, ffmpeg.wasm audio extraction, splitting a segment into timed sentences |
-| `src/sse.ts` | Parsing the Responses API SSE stream and partial JSON for the template creator |
-| `src/prompts.ts` | ASR prompt and keywords, translation system prompt and output schema |
-| `src/cost.ts` | Price tables and ASR / translation cost arithmetic |
-| `src/config.ts` | Default models, built-in templates, deployment config |
-| `src/builtin/` | Built-in templates |
-| `tests/` | Unit tests (Vitest) |
-| `e2e/` | End-to-end tests (Playwright) with a fake Realtime WebSocket and translation API |
-
 All large assets are served from the same origin with no external CDN: ffmpeg.wasm (32 MB) and the onnxruntime-web wasm (14 MB) come from npm dependencies, and the CAM++ model is downloaded and sha256-verified by `scripts/fetch-model.mjs` before the build. Each is loaded only when needed.
 
 ## Deployment
@@ -99,6 +75,27 @@ npm run deploy:selfhost                  # deploys committed code only; pre-comp
 ```
 
 Endpoints the proxy must allow: `/realtime` (WebSocket), `/chat/completions` and `/responses`. Users who enter their own key in Settings still connect to OpenAI directly.
+
+### Self-hosted with a ChatGPT (Codex) subscription (optional)
+
+Tools such as OpenClaw, pi and Hermes Agent can sign in with a ChatGPT account and send LLM requests through the Codex subscription instead of a paid API key. Tsuji can do the same when self-hosted. The browser page cannot sign in to ChatGPT itself, so the sign-in lives on your server:
+
+1. On the server, run a bridge that signs in with your ChatGPT account and exposes an OpenAI-compatible API, for example [GPTMock](https://github.com/rapidrabbit76/GPTMock) (a fork of [ChatMock](https://github.com/RayBytes/ChatMock)): `uvx gptmock login`, then `uvx gptmock serve`, which listens on `http://127.0.0.1:8000/v1`. Keep it bound to localhost.
+2. In the reverse proxy behind `VITE_SERVER_API` (the same login-protected path as above), route by endpoint:
+
+   | Path under `VITE_SERVER_API` | Send to |
+   |---|---|
+   | `/chat/completions` (translation, summaries, speaker judgment) | the bridge |
+   | `/responses` (template creator) | the bridge |
+   | `/realtime` (speech recognition, WebSocket) | `api.openai.com` with your API key, as before |
+
+   Speech recognition uses the Realtime transcription API, which a ChatGPT subscription does not cover, so an API key is still needed for it.
+3. Settings offers `gpt-6.1-sol` and `gpt-6-luna` for translation and templates. Check with the bridge's `/v1/models` that the ones you choose are available on your plan; if a name differs, rewrite the `model` field in your proxy.
+
+Notes:
+- The spend estimate in Records skips requests whose `usage` contains `"billed_to": "chatgpt_subscription"`. If your bridge doesn't add this field, add it in your proxy to leave those requests out; otherwise they are counted at API list prices.
+- Bridges mimic the Codex client and may not support every request option. Web search and file attachments in the template creator are the most likely to fail.
+- Signing in with a subscription outside OpenAI's own apps is not an official API. It uses your plan's Codex limits, can stop working without notice, and you are responsible for checking it against OpenAI's terms.
 
 ## Acknowledgements
 
