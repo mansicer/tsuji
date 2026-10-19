@@ -2,7 +2,7 @@
 import "./style.css";
 import * as ort from "onnxruntime-web/wasm";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
-import { applyMemo, memoPrompt, MEMO_SCHEMA } from "./memo";
+import { applyMemo, memoPrompt } from "./memo";
 import { parseGlossary, glossaryText } from "./glossary";
 import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
@@ -14,6 +14,8 @@ import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNor
 import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "./i18n";
 import { fetchProgress, extractPcm, splitTimed } from "./media";
 import { readResponseStream, partialJsonString } from "./sse";
+import { asrPrompt, keywords, glossaryForLLM, SYSTEM, SCHEMA } from "./prompts";
+import { WEB_SEARCH_PER_CALL, asrCost, mtCost } from "./cost";
 
 // ---------- 小工具 ----------
 const $ = (s) => document.querySelector(s);
@@ -224,53 +226,6 @@ function applySettings() {
   sset("showSrc", $("#showSrc").checked ? null : "0");
 }
 
-// ---------- 提示词 ----------
-function sep() { return CJK.test(cfg.tpl.asrPrompt || cfg.tpl.name) || ["ja", "zh"].includes(cfg.tpl.source) ? "、" : ", "; }
-function asrPrompt(maxChars = 900) {
-  const { people, terms } = cfg.glossary, s = sep();
-  let head = (cfg.tpl.asrPrompt || cfg.tpl.name || "").trim();
-  if (head && !/[。.!?！？]$/.test(head)) head += s === "、" ? "。" : ".";
-  if (people.length) head += (s === "、" ? "出演:" : " Speakers: ") + people.map((e) => e.src).join(s) + (s === "、" ? "。" : ".");
-  let words = "";
-  for (const x of terms) {
-    const next = words ? words + s + x.src : x.src;
-    if (head.length + next.length + 6 > maxChars) break;
-    words = next;
-  }
-  return head + (words ? (s === "、" ? "用語:" : " Terms: ") + words + (s === "、" ? "。" : ".") : "");
-}
-function keywords(limit = 300) { return [...new Set([...cfg.glossary.people, ...cfg.glossary.terms].map((e) => e.src))].slice(0, limit); }
-function glossaryForLLM() {
-  const fmt = (e) => "- " + [e.src, e.reading && "reading: " + e.reading, e.tgt && "translation: " + e.tgt, e.notes && "notes: " + e.notes].filter(Boolean).join(" | ");
-  const { people, terms } = cfg.glossary;
-  return [
-    cfg.tpl.description && "Background:\n" + cfg.tpl.description,
-    cfg.tpl.style && "Template-specific translation rules (follow these, they override the defaults above):\n" + cfg.tpl.style,
-    people.length && "Speakers (almost all speech comes from these people; when a name is misrecognized, prefer correcting to one of these):\n" + people.map(fmt).join("\n"),
-    terms.length && "Glossary / proper nouns:\n" + terms.map(fmt).join("\n"),
-  ].filter(Boolean).join("\n\n");
-}
-const SYSTEM = () => {
-  const src = cfg.tpl.source === "auto" ? "speech (language may vary)" : srcName(cfg.tpl.source, "en") + " speech", tgt = tgtName(cfg.tpl.target, "en");
-  return `You are a live subtitle translator. The input is real-time speech recognition (ASR) of ${src} from: ${cfg.tpl.name || "a live event"}. The audience needs ${tgt} subtitles.
-
-How to work:
-1. Fix the source text first: ASR often mishears names, titles and jargon as similar-sounding words and drops punctuation. If something sounds close to a glossary entry and the context fits, change it to the glossary spelling; if unsure, keep it. Never invent content. Laughter and filler can be trimmed. Put the corrected source text in "src".
-2. Translate into ${tgt} in "tgt": natural spoken style, concise, readable at a glance as a subtitle; keep the speaker's tone (teasing, surprise, etc.). Use the glossary translations for names and terms strictly; names with no translation stay in the original.
-3. One output item per input item, same id. Return empty "src" and "tgt" only when the input is pure noise, applause or music with no recognizable words. Far-field ASR is often fragmentary: if any meaning can be recovered, translate it, marking uncertain parts with "(?)".
-4. If a segment is already in ${tgt}, still return it in "tgt" (cleaned up).
-5. "Recent context" is only for understanding references and topics; do not translate it again.
-6. "Running notes" are facts you recorded earlier for translating later lines. Use them. In "memory", you may add notes that will help translate later lines and are not already covered by the glossary or notes: who is present or speaking, the current segment/topic, nicknames and how people address each other, what an ambiguous word or name refers to here, recurring jokes, how you resolved a mishearing. One short sentence each, written in English. Add nothing for ordinary lines (usually "add" is empty). Put in "drop" the numbers of notes that became outdated or turned out wrong.
-
-${glossaryForLLM()}`;
-};
-const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["items"],
-  properties: { items: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "src", "tgt"],
-    properties: { id: { type: "integer" }, src: { type: "string" }, tgt: { type: "string" } } } }, memory: MEMO_SCHEMA },
-};
-SCHEMA.required.push("memory");
-
 // ---------- 字幕列表 ----------
 const lines = [];          // {id, raw, src, tgt, t, el}
 let follow = true;
@@ -408,7 +363,7 @@ async function pumpTranslate() {
       headers: apiHeaders(),
       body: JSON.stringify({
         model: cfg.mtModel, ...effort(),
-        messages: [{ role: "system", content: SYSTEM() }, { role: "user", content: user }],
+        messages: [{ role: "system", content: SYSTEM(cfg, srcName(cfg.tpl.source, "en"), tgtName(cfg.tpl.target, "en")) }, { role: "user", content: user }],
         response_format: { type: "json_schema", json_schema: { name: "subtitles", strict: true, schema: SCHEMA } },
       }),
     });
@@ -464,9 +419,9 @@ function sessionConfig() {
   const lang = (LANGS[cfg.tpl.source] || LANGS.auto).asr;
   if (lang) transcription.language = lang;
   // 实测 gpt-transcribe:关键词 + 提示一起给最准(只给提示时节目名写成片假名,都不给时羊宮妃那听成陽空ひな)
-  const kw = keywords();
+  const kw = keywords(cfg.glossary);
   if ((cfg.asrModel === "gpt-live-transcribe" || cfg.asrModel === "gpt-transcribe") && kw.length) transcription.keywords = kw;
-  const prompt = asrPrompt();
+  const prompt = asrPrompt(cfg);
   if (cfg.asrModel !== "gpt-realtime-whisper" && prompt) transcription.prompt = prompt; // whisper 两个都不收
   return { type: "transcription", audio: { input: {
     format: { type: "audio/pcm", rate: 24000 },
@@ -521,10 +476,7 @@ function showLat() {
   $("#infobar").title = t("ib.deltas", { n: diag.deltas }); $("#signal").title = t("ib.level");
   showCost();
 }
-// 费用估算(官方单价,美元)
-const ASR_PRICE_PER_MIN = { "gpt-live-transcribe": 0.017, "gpt-realtime-whisper": 0.017, "gpt-transcribe": 0.0045, "gpt-4o-transcribe": 0.006, "gpt-4o-mini-transcribe": 0.003 };
-const MT_PRICE = { "gpt-6-sol": [2.0, 0.2, 10.0], "gpt-6.1-sol": [2.0, 0.1, 10.0], "gpt-6-luna": [0.1, 0.01, 0.5] }; // 输入 / 缓存输入 / 输出
-const WEB_SEARCH_PER_CALL = 0.01;
+// 费用估算(单价和计算见 cost.ts)
 const cost = {
   asr: Number(store.get("costAsr", "0")) || 0, mt: Number(store.get("costMt", "0")) || 0,
   total() { return this.asr + this.mt; },
@@ -536,16 +488,13 @@ function showCost() {
   $("#costOut").textContent = t("cost", { a: usd(cost.asr), m: usd(cost.mt), t: usd(cost.total()) });
 }
 function addAsrCost(seconds, model = cfg.asrModel) {
-  cost.asr += (seconds / 60) * (ASR_PRICE_PER_MIN[model] || 0.017);
+  cost.asr += asrCost(seconds, model);
   if (performance.now() - costShownAt > 1000) { costShownAt = performance.now(); cost.save(); showLat(); }
 }
-// 兼容 Chat Completions(prompt_tokens)和 Responses(input_tokens)两种 usage
 function addMtCost(model, u, extra = 0) {
-  if (!u || u.billed_to === "chatgpt_subscription") return; // 服务器转发到 ChatGPT 订阅的请求不另计费
-  const [pin, pcache, pout] = MT_PRICE[model] || MT_PRICE["gpt-6-sol"];
-  const input = u.prompt_tokens ?? u.input_tokens ?? 0, output = u.completion_tokens ?? u.output_tokens ?? 0;
-  const cached = (u.prompt_tokens_details || u.input_tokens_details || {}).cached_tokens || 0;
-  cost.mt += ((input - cached) * pin + cached * pcache + output * pout) / 1e6 + extra;
+  const usd = mtCost(model, u, extra);
+  if (usd === null) return; // 没有 usage 或 ChatGPT 订阅:不计费
+  cost.mt += usd;
   cost.save(); showLat();
 }
 setInterval(() => {
@@ -1650,7 +1599,7 @@ async function recapCall(prompt) {
   return rd.choices[0].message.content;
 }
 async function makeRecap(rows, onStep, budgetOverride = 0) {
-  const tgt = tgtName(cfg.tpl.target, "en"), ctx = glossaryForLLM();
+  const tgt = tgtName(cfg.tpl.target, "en"), ctx = glossaryForLLM(cfg);
   const intro = `a live subtitle log of "${cfg.tpl.name}" (ASR + live correction; may still contain recognition errors)`;
   const final = `Write in ${tgt}, plain text:\n1. Summary (about 300 words or 300 characters): what happened, segments, highlights and important announcements (events, merchandise, release dates — list dates exactly).\n2. Section by section: split by segment/topic, give each a short heading, and rewrite the content as clear, complete prose.\n3. Uncertain points: places where the ASR may have misheard or that cannot be determined.`;
   let budget = budgetOverride || Math.floor((CONTEXT[cfg.ctModel] || 128000) * 0.4) - estTokens(ctx) - 2000;

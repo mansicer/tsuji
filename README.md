@@ -74,6 +74,8 @@ Code layout:
 | `src/tokens.ts` | Token estimates and splitting long logs for summaries |
 | `src/media.ts` | File translation helpers: download with progress, ffmpeg.wasm audio extraction, splitting a segment into timed sentences |
 | `src/sse.ts` | Parsing the Responses API SSE stream and partial JSON for the template creator |
+| `src/prompts.ts` | ASR prompt and keywords, translation system prompt and output schema |
+| `src/cost.ts` | Price tables and ASR / translation cost arithmetic |
 | `src/config.ts` | Default models, built-in templates, deployment config |
 | `src/builtin/` | Built-in templates |
 | `tests/` | Unit tests (Vitest) |
