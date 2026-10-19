@@ -65,6 +65,7 @@ Code layout:
 | `src/main.ts` | Main application |
 | `src/storage.ts` | localStorage / IndexedDB primitives and storage-failure warning throttling |
 | `src/audio.ts` | Microphone signal processing: resampling to 24 kHz PCM16 chunks, digital gain / AGC, signal level steps |
+| `src/i18n.ts` | UI strings (zh / en), interface language, language names |
 | `src/spk/core.ts` | Speaker identification math: resampling, energy-based segmentation, Kaldi-compatible fbank, clustering, smoothing |
 | `src/spk/judge.ts` | GPT speaker judgment |
 | `src/memo.ts` | Translation memory notes |
