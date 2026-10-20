@@ -5,7 +5,7 @@ import { liveAudio, onLineAudio } from "../live-audio";
 import { loadModel, embed } from "./engine";
 import { SPK_DIM, spkNorm } from "./core";
 import { LIVE_SPK, LiveCore, letterOf, liveLibEntries, f32b64, b64f32 } from "./live-core";
-import type { LiveLibEntry } from "./live-core";
+import type { LiveLibEntry, SavedGroups } from "./live-core";
 import { detectCue } from "./live-schedule";
 import type { NameSrc } from "./live-schedule";
 import { state, cfg, lines } from "../state";
@@ -43,8 +43,15 @@ let core = new LiveCore(), sid: string | null = null, gen = 0;
 /** 收音中且开着说话人识别 */
 let running = false;
 let ready = false, loading = false, loadPct = 0, errMsg = "", savedMsg = "";
+/** 模型加载失败:不再排队(重试成功或下次开始收音再说);loadFails = 连续失败次数 */
+let failed = false, loadFails = 0, retryTimer: ReturnType<typeof setTimeout> | undefined;
+/** 加载失败后隔多久重试(毫秒),用完就等下次开始收音 */
+const LOAD_RETRY = [2000, 8000, 30_000];
+/** 这个会话存的组:0 还没读(说话人识别关着时不读)、1 在读、2 读完。读完才处理新句子、才存 */
+let lstate = 2;
 const queue: { line: Line; pcm?: Float32Array | null }[] = [];
-let busy = false, lastRecluster = 0, clockStop = 0, saveTimer: ReturnType<typeof setTimeout> | undefined;
+let busy = false, lastRecluster = 0, clockStop = 0, saveTimer: ReturnType<typeof setTimeout> | undefined, pendingSave: (() => void) | null = null;
+let tick: ReturnType<typeof setInterval> | undefined;
 /** 本次收音里出的行 */
 let runLines = new Set<Line>();
 let cues: number[] = [];
@@ -91,8 +98,13 @@ function note(l: Line) {
 function save() {
   clearTimeout(saveTimer);
   const s = sid, c = core;
-  saveTimer = setTimeout(() => { if (s && c === core) idb.put("lspk:" + s, c.save()).catch(() => {}); }, 600);
+  if (!s || lstate !== 2) { pendingSave = null; return; }
+  // 会话已经删了(或换了)就不写,免得留下孤立的 lspk:<id>
+  pendingSave = () => { pendingSave = null; if (sid === s && c === core && state.sessions.some((x) => x.id === s)) idb.put("lspk:" + s, c.save()).catch(() => {}); };
+  saveTimer = setTimeout(pendingSave, 600);
 }
+/** 切换会话、关页面前:把还在防抖里的组立刻写掉(main.ts 的 flushLines 也调用) */
+export function liveSpkFlush(): void { clearTimeout(saveTimer); if (pendingSave) pendingSave(); }
 
 // ---------- 流水线 ----------
 function cut(l: Line): Float32Array | null {
@@ -105,12 +117,13 @@ function onLine(l: Line) {
     runLines.add(l);
     if (detectCue(l.src || l.raw, cfg.tpl.source, cfg.glossary.people)) cues.push(Date.now());
   }
+  if (failed) return; // 模型加载失败:不排队,队列不会越积越长
   if (!queue.some((q) => q.line === l)) queue.push({ line: l });
   perf.qMax = Math.max(perf.qMax, queue.length);
   pump();
 }
 async function pump() {
-  if (busy || !ready) return;
+  if (busy || !ready || lstate !== 2) return;
   busy = true; const g0 = gen;
   try {
     while (queue.length && gen === g0) {
@@ -138,50 +151,74 @@ async function pump() {
     // 收音停了、队列做完:最后整体聚一次
     if (gen === g0 && !running && !queue.length && core.fresh) { recluster(); core.nameFromLibrary(lib()); paintAll(); save(); }
   } finally { busy = false; }
-  if (gen === g0 && queue.length) pump();
+  // gen 变了(切会话、关了又开)时队列里可能已经是新一轮的句子:不管 gen,有就接着做
+  if (queue.length) pump();
   else ui();
 }
 function recluster() { core.recluster(Date.now()); lastRecluster = Date.now(); }
-// 没有新句子时也按时间整体重新聚类(每 reclusterMs 一次,有新片段才做)
-setInterval(() => { if (running && !busy && core.due(Date.now(), lastRecluster)) { recluster(); core.nameFromLibrary(lib()); paintAll(); save(); } }, 5000);
+// 没有新句子时也按时间整体重新聚类(每 reclusterMs 一次,有新片段才做);只在收音且开着说话人识别时跑
+function ticking(on: boolean) {
+  clearInterval(tick); tick = undefined;
+  if (on) tick = setInterval(() => { if (running && !busy && lstate === 2 && core.due(Date.now(), lastRecluster)) { recluster(); core.nameFromLibrary(lib()); paintAll(); save(); } }, 5000);
+}
 function ensureModel() {
   if (ready || loading) return;
-  loading = true; loadPct = 0; errMsg = ""; ui();
+  clearTimeout(retryTimer);
+  loading = true; failed = false; loadPct = 0; errMsg = ""; ui();
   loadModel((p) => { loadPct = p; ui(); })
-    .then(() => { ready = true; pump(); }, (e) => { console.error(e); errMsg = (e as Error).message || String(e); })
+    .then(() => { ready = true; loadFails = 0; pump(); }, (e) => {
+      console.error(e); errMsg = (e as Error).message || String(e); failed = true; queue.length = 0;
+      // 退避重试几次;都失败就等下次开始收音
+      const wait = LOAD_RETRY[loadFails++];
+      if (wait != null) retryTimer = setTimeout(() => { if (running) ensureModel(); }, wait);
+    })
     .finally(() => { loading = false; ui(); });
+}
+/** 读回这个会话存的组(只读一次;读完才开始处理句子) */
+function loadGroups() {
+  const s = sid, c = core;
+  if (!s || lstate !== 0) return;
+  lstate = 1;
+  idb.get("lspk:" + s).then((rec) => { if (sid === s && core === c && rec) { c.load(rec as SavedGroups); paintAll(); } }).catch(() => {})
+    .finally(() => { if (sid === s && core === c) { lstate = 2; pump(); ui(); } });
 }
 
 // ---------- 生命周期(main.ts 调用) ----------
 /** 切换会话(restoreLines 里):清掉上一个会话的状态,读回这个会话存的组 */
 export function liveSpkSession(): void {
-  gen++; queue.length = 0; core = new LiveCore(); running = false; runLines = new Set(); cues = []; hist.clear(); savedMsg = ""; closePick();
-  const ss = state.curSess, s = sid = ss && ss.kind !== "file" ? ss.id : null, c = core;
-  $("#lspkSaveBox").hidden = true; ui();
-  if (s) idb.get("lspk:" + s).then((rec) => { if (sid === s && core === c && rec) { c.load(rec); paintAll(); ui(); } }).catch(() => {});
+  liveSpkFlush();
+  gen++; queue.length = 0; core = new LiveCore(); running = false; ticking(false); runLines = new Set(); cues = []; hist.clear(); savedMsg = ""; closePick();
+  const ss = state.curSess; sid = ss && ss.kind !== "file" ? ss.id : null;
+  lstate = sid ? 0 : 2;
+  $("#lspkSaveBox").hidden = true;
+  if (spkOn()) loadGroups(); // 说话人识别关着就不读,打开时再读
+  ui();
 }
 /** 开始收音时(开着说话人识别才真正启动;模型在后台加载) */
 export function liveSpkStart(): void {
   if (!sid || !state.curSess || state.curSess.id !== sid || !spkOn() || running) return;
   running = true; runLines = new Set(); savedMsg = ""; $("#lspkSaveBox").hidden = true;
-  ensureModel(); ui();
+  if (failed && !loading) loadFails = 0; // 上次加载失败:这次开始收音再试一轮
+  loadGroups(); ensureModel(); ticking(true); ui();
 }
 /** 停止收音时(在 liveAudio.stop() 之前):还在排队的句子先把音频切出来,停了也能算完 */
 export function liveSpkStop(): void {
   if (!running) return;
   clockStop = liveAudio.now();
   for (const q of queue) if (q.pcm === undefined) q.pcm = cut(q.line);
-  running = false; pump(); ui();
+  running = false; ticking(false); clearTimeout(retryTimer); pump(); ui();
 }
 /** 设置里开关说话人识别 */
 export function liveSpkToggle(on: boolean): void {
-  if (on) { if (state.running) liveSpkStart(); }
-  else if (running) { running = false; queue.length = 0; gen++; }
+  if (on) { loadGroups(); if (state.running) liveSpkStart(); }
+  else if (running) { running = false; queue.length = 0; gen++; ticking(false); clearTimeout(retryTimer); }
   ui();
 }
 /** 清空记录:组也清掉 */
 export function liveSpkClear(): void {
+  clearTimeout(saveTimer); pendingSave = null; // 防抖里的是清空前的组:不写,下面直接删
   gen++; queue.length = 0; core = new LiveCore(); hist.clear(); cues = []; runLines = new Set(); closePick();
+  lstate = 2;
   if (sid) idb.del("lspk:" + sid).catch(() => {});
   $("#lspkSaveBox").hidden = true; ui();
 }

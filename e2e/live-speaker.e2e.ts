@@ -321,4 +321,39 @@ test.describe.serial("live speaker identification", () => {
     await page.click("#go");
     expect(errors).toEqual([]);
   });
+
+  test("deleting the only session while listening leaves no lspk: key behind", async () => {
+    test.setTimeout(120_000);
+    // 只留当前会话
+    await page.click("#toHome");
+    const others = page.locator("#sessList .card:not(.current) .i-trash");
+    while (await others.count()) { await others.first().click(); await others.first().click(); }
+    await expect(page.locator("#sessList .card")).toHaveCount(1);
+    await page.click("#sessList .card.current .btn.primary");
+    await page.click("#go");
+    await page.waitForFunction(() => window.__ws && window.__ws.readyState === 1 && window.__t.lspk.ready);
+    const connAt: number = await page.evaluate(() => window.__t.liveAudio.connAt);
+    await waitNow(page, connAt + 11_000);
+    // 推几句,第一句的组算出来(防抖保存已排上)、后面的还在排队时就删会话
+    await page.evaluate((c) => {
+      const w = window.__ws, t = window.__t.liveAudio.now() - c;
+      for (let i = 0; i < 6; i++) {
+        const id = "d" + i, a = t - 10_000 + i * 1600;
+        w.emit({ type: "input_audio_buffer.speech_started", item_id: id, audio_start_ms: a });
+        w.emit({ type: "input_audio_buffer.speech_stopped", item_id: id, audio_end_ms: a + 1400 });
+        w.emit({ type: "input_audio_buffer.committed", item_id: id });
+        w.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: id, transcript: "probe " + i });
+      }
+    }, connAt);
+    await page.waitForFunction(() => window.__t.lines.some((l: any) => l.raw.startsWith("probe") && l.lspk), null, { timeout: 30_000 });
+    console.log("at delete:", JSON.stringify(await page.evaluate(() => ({ queue: window.__t.lspk.queue, busy: window.__t.lspk.busy }))));
+    await page.click("#toHome");
+    const del = page.locator("#sessList .card.current .i-trash");
+    await del.click(); await del.click();
+    await expect(page.locator("#sessList .card")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__t.lspk.core.visible().length)).toBe(0);
+    await page.waitForTimeout(2000);
+    expect((await idbKeys(page)).filter((k) => k.startsWith("lspk:"))).toEqual([]);
+    expect(errors).toEqual([]);
+  });
 });

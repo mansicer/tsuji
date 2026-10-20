@@ -1,6 +1,6 @@
 // 实时说话人的纯计算部分:在线分组、组的延迟显示、短片段规则、定期整体重新聚类(匈牙利对应保持组号和名字)、
 // 组质心对照声纹库(按声纹来源分阈值)。不碰 DOM,node 下可直接用合成向量测
-import { SPK_DIM, spkCluster, spkDot, spkNorm } from "./core";
+import { SPK_DIM, spkCluster, spkDot, spkNorm, spkSims } from "./core";
 import { hungarian } from "./live-eval";
 import { applyNames } from "./live-schedule";
 import type { NameSrc, NameProposal, NameChange } from "./live-schedule";
@@ -49,6 +49,7 @@ const RANK: Record<NameSrc, number> = { "gpt-guess": 0, "gpt-evidence": 1, libra
 export function letterOf(id: number): string { let s = "", k = id; do { s = String.fromCharCode(65 + (k % 26)) + s; k = Math.floor(k / 26) - 1; } while (k >= 0); return s; }
 export const f32b64 = (v: ArrayLike<number>): string => { const b = new Uint8Array(Float32Array.from(v).buffer); let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); };
 export const b64f32 = (s: string): Float32Array => new Float32Array(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer);
+const sameName = (a: string | null, b: string) => !!a && a.trim().toLowerCase() === b.trim().toLowerCase();
 const zeros = () => new Float32Array(SPK_DIM);
 function addTo(a: Float32Array, b: ArrayLike<number>, w = 1) { for (let d = 0; d < SPK_DIM; d++) a[d] += b[d] * w; }
 
@@ -98,6 +99,8 @@ export class LiveCore {
   fresh = 0;
   private tmp = -1;
   private byLine = new Map<number, LiveSeg>();
+  /** 上次重新聚类的窗口和两两余弦 */
+  private simCache: { W: LiveSeg[]; S: Float64Array } | null = null;
   constructor(readonly C: LiveSpkCfg = LIVE_SPK) {}
 
   /** 已显示的组,按 id */
@@ -169,7 +172,7 @@ export class LiveCore {
     this.fresh = 0;
     const C = this.C, W = this.segs.filter((s) => s.member).slice(-C.keep), inWin = new Set(W);
     if (W.length < 2) return;
-    const lab = spkCluster(W.map((s) => s.vec), C.dist), cm = new Map<number, LiveSeg[]>();
+    const lab = spkCluster(W.map((s) => s.vec), C.dist, this.sims(W)), cm = new Map<number, LiveSeg[]>();
     W.forEach((s, i) => { const c = cm.get(lab[i]); if (c) c.push(s); else cm.set(lab[i], [s]); });
     const cl = [...cm.values()], olds = [...new Set(W.map((s) => s.g!))].filter((id) => this.gs.has(id));
     const ov = cl.map((c) => olds.map((o) => c.reduce((a, s) => a + (s.g === o ? s.dur : 0), 0)));
@@ -204,6 +207,18 @@ export class LiveCore {
     for (const s of this.segs) if (!s.member) this.labelShort(s);
     for (const s of W) { const g = this.group(s.g); if (g) s.sim = spkDot(s.vec, g.cent); }
   }
+  /** 窗口里两两的余弦:上次重新聚类时算过的对直接拿(通常只多了十来段),和全算一遍逐位相同。返回的是副本(spkCluster 会改写) */
+  private sims(W: LiveSeg[]): Float64Array {
+    const n = W.length, old = this.simCache, at = new Map(old ? old.W.map((s, i) => [s, i] as const) : []), oi = Int32Array.from(W, (s) => at.get(s) ?? -1);
+    let S: Float64Array;
+    if (!old || oi.filter((x) => x >= 0).length < n / 2) S = spkSims(W.map((s) => s.vec));
+    else {
+      const on = old.W.length, P = old.S; S = new Float64Array(n * n);
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) S[i * n + j] = S[j * n + i] = oi[i] >= 0 && oi[j] >= 0 ? P[oi[i] * on + oi[j]] : spkDot(W[i].vec, W[j].vec);
+    }
+    this.simCache = { W, S };
+    return S.slice();
+  }
   /** 按成员重新算各组的和、段数、时长、质心;没成员也没 base 的组删掉 */
   private refresh() {
     for (const g of this.gs.values()) {
@@ -213,9 +228,10 @@ export class LiveCore {
     for (const [id, g] of [...this.gs]) { if (g.n <= 0) this.gs.delete(id); else g.cent = spkNorm(g.sum); }
   }
 
-  /** 按优先级改名(GPT、声纹库);返回改动 */
+  /** 按优先级改名(GPT、声纹库);返回改动。别的组已经用 library / manual 占着的名字,来源更低的不能再给 */
   propose(p: NameProposal[]): NameChange[] {
-    const vis = this.visible(), r = applyNames(vis.map((g) => ({ id: g.id, dur: g.dur, name: g.name, src: g.src })), p);
+    const vis = this.visible(), held = (x: NameProposal) => vis.some((g) => g.id !== x.id && sameName(g.name, x.name) && g.src && RANK[g.src] >= RANK.library && RANK[x.src] < RANK[g.src]);
+    const r = applyNames(vis.map((g) => ({ id: g.id, dur: g.dur, name: g.name, src: g.src })), p.filter((x) => !held(x)));
     for (const c of r.changes) { const g = this.gs.get(c.id)!; g.name = c.to.name; g.src = c.to.src; }
     return r.changes;
   }
@@ -225,12 +241,16 @@ export class LiveCore {
     if (g.name === nm && g.src === (nm ? "manual" : null)) return false;
     g.name = nm; g.src = nm ? "manual" : null; return true;
   }
-  /** 声纹库给已显示、够长、还没名字或名字来源更低的组起名(同名已被别的组占用的跳过) */
+  /**
+   * 声纹库给已显示、够长、还没名字或名字来源更低的组起名。同名已被别的组用 library / manual 占着的跳过;
+   * 别的组只是 GPT 给的同名(gpt-evidence / gpt-guess)不算占用,声纹库起名后把它们的这个名字清掉
+   */
   nameFromLibrary(lib: LiveLibEntry[], now = Date.now()): NameChange[] {
     if (!lib.length) { this.announce(now, true); return []; }
-    const vis = this.visible(), taken = (nm: string, id: number) => vis.some((g) => g.id !== id && g.name && g.name.toLowerCase() === nm.toLowerCase());
+    const vis = this.visible(), taken = (nm: string, id: number) => vis.some((g) => g.id !== id && sameName(g.name, nm) && (g.src === "library" || g.src === "manual"));
     const hits = libMatch(vis.map((g) => ({ id: g.id, cent: g.cent, dur: g.dur })), lib, this.C).filter((m) => !taken(m.name, m.id));
     const ch = this.propose(hits.map((m) => ({ id: m.id, name: m.name, src: "library" as const })));
+    for (const c of ch) for (const g of vis) if (g.id !== c.id && sameName(g.name, c.to.name) && g.src && RANK[g.src] < RANK.library) { g.name = null; g.src = null; }
     this.announce(now, false);
     return ch;
   }

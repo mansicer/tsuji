@@ -114,6 +114,21 @@ describe("recluster", () => {
     expect(c.events.find((e) => e.kind === "split")).toEqual({ kind: "split", at: 99, id: 1, other: 0 });
   });
 
+  it("reclustering with cached similarities gives exactly the result of computing them afresh", () => {
+    const sp = [randVec(), randVec(), randVec()], cfg = { ...LIVE_SPK, keep: 60 }, a = new LiveCore(cfg), b = new LiveCore(cfg);
+    for (let i = 0; i < 150; i++) {
+      const v = seg(sp[Math.floor(R() * 3)], 0.6), d = 1 + R() * 3;
+      a.add(i, d, v, i); b.add(i, d, v, i);
+      if (i % 3 === 0) { const k = Math.floor(R() * i); a.add(k, d, v, i); b.add(k, d, v, i); } // 同一句再来一次:换了片段
+      if (i % 10 === 9) {
+        (b as unknown as { simCache: null }).simCache = null; // b 每次全算
+        a.recluster(i); b.recluster(i);
+        expect(a.segs.map((s) => s.g)).toEqual(b.segs.map((s) => s.g));
+      }
+    }
+    expect(a.visible().length).toBeGreaterThanOrEqual(3);
+  });
+
   it("due(): every reclusterN new segments or reclusterMs", () => {
     const c = new LiveCore(), a = randVec();
     expect(c.due(0, 0)).toBe(false);
@@ -171,6 +186,42 @@ describe("library", () => {
     expect(c.group(1)!.name).toBe("Me");
     expect(c.propose([{ id: 0, name: "Other", src: "gpt-evidence" }])).toEqual([]); // GPT 改不了 library
     expect(c.propose([{ id: 0, name: "Kal2", src: "library" }])).toHaveLength(1);
+  });
+  it("a GPT name does not block the library: the library names the right group and clears the GPT guess elsewhere", () => {
+    const sp = [randVec(), randVec()], c = new LiveCore();
+    for (let i = 0; i < 6; i++) c.add(i, 3, seg(sp[i % 2], 0.3), i);
+    // GPT 把 Alice 猜给了组 0;声纹库认出组 1 是 Alice
+    expect(c.propose([{ id: 0, name: "Alice", src: "gpt-guess" }])).toHaveLength(1);
+    const lib = [ent("Alice", [[sp[1], "live"]]), ent("Zed", [[randVec(), "live"]])];
+    expect(c.nameFromLibrary(lib).map((x) => [x.id, x.to])).toEqual([[1, { name: "Alice", src: "library" }]]);
+    expect([c.group(1)!.name, c.group(1)!.src]).toEqual(["Alice", "library"]);
+    expect([c.group(0)!.name, c.group(0)!.src]).toEqual([null, null]);
+    // GPT 再把 Alice 给组 0:已被声纹库占着,不收
+    expect(c.propose([{ id: 0, name: "alice", src: "gpt-evidence" }])).toEqual([]);
+    expect(c.group(0)!.name).toBeNull();
+    // gpt-evidence 的同名也一样被清掉
+    const d = new LiveCore();
+    for (let i = 0; i < 6; i++) d.add(i, 3, seg(sp[i % 2], 0.3), i);
+    d.propose([{ id: 0, name: "Alice", src: "gpt-evidence" }]);
+    d.nameFromLibrary(lib);
+    expect(d.visible().map((g) => [g.name, g.src])).toEqual([[null, null], ["Alice", "library"]]);
+  });
+  it("a name held with library or manual still blocks the library, and is never cleared", () => {
+    const sp = [randVec(), randVec()], lib = [ent("Alice", [[sp[1], "live"]]), ent("Zed", [[randVec(), "live"]])];
+    for (const src of ["manual", "library"] as const) {
+      const c = new LiveCore();
+      for (let i = 0; i < 6; i++) c.add(i, 3, seg(sp[i % 2], 0.3), i);
+      if (src === "manual") c.rename(0, "Alice"); else c.propose([{ id: 0, name: "Alice", src: "library" }]);
+      expect(c.nameFromLibrary(lib)).toEqual([]);
+      expect(c.visible().map((g) => [g.name, g.src])).toEqual([["Alice", src], [null, null]]);
+    }
+  });
+  it("a library name that does not change the group (manual name kept) clears nothing", () => {
+    const sp = [randVec(), randVec()], c = new LiveCore(), lib = [ent("Alice", [[sp[1], "live"]]), ent("Zed", [[randVec(), "live"]])];
+    for (let i = 0; i < 6; i++) c.add(i, 3, seg(sp[i % 2], 0.3), i);
+    c.propose([{ id: 0, name: "Alice", src: "gpt-guess" }]); c.rename(1, "Bob");
+    expect(c.nameFromLibrary(lib)).toEqual([]);
+    expect(c.visible().map((g) => [g.name, g.src])).toEqual([["Alice", "gpt-guess"], ["Bob", "manual"]]);
   });
   it("with a library, new-group waits until the library had a chance (libDur), and is skipped if it named the group", () => {
     const sp = [randVec(), randVec()], c = new LiveCore(), lib = [ent("Kal", [[sp[0], "live"]])];

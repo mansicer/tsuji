@@ -23,7 +23,7 @@ import { initRecord, recBegin, recEnd, recUi } from "./live-record";
 import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
 import * as spkEngine from "./spk/engine";
 import { startLiveJudge, stopLiveJudge } from "./spk/live-judge";
-import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug } from "./spk/live";
+import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkFlush, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug } from "./spk/live";
 
 // ---------- 小工具 ----------
 // 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
@@ -198,10 +198,9 @@ function saveLines() {
   saveLinesTimer = setTimeout(pendingSave, 500);
 }
 /** 切换会话、关页面前:把还在防抖里的保存立刻写掉(lines 马上要被清空) */
-function flushLines() { clearTimeout(saveLinesTimer); if (pendingSave) pendingSave(); }
+function flushLines() { clearTimeout(saveLinesTimer); if (pendingSave) pendingSave(); liveSpkFlush(); }
 function cancelSave() { clearTimeout(saveLinesTimer); pendingSave = null; }
 function restoreLines() {
-  liveSpkSession();
   const saved = state.lineStore.get(sessKey());
   if (!saved.length) return showEmptyHint();
   for (const s of saved) {
@@ -1001,7 +1000,7 @@ $("#recap").onclick = async (e: MouseEvent) => {
 
 // ---------- 启动 ----------
 // init* 必须在下面第一个 await 之前调用:在那之前模块代码同步执行,点击等事件回调插不进来,不会用到还没注入依赖的模块
-initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
+initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, liveSpkSession, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
 // 录音转文件会话:同一模板、同样的语言
 initRecord({ saveSessions, getStream: () => stream, audioNow: () => liveAudio.now(), openSession: (id) => { useSession(id); show("live"); }, toFileSession: async (live, f) => { const ss = newFileSession(live.tplId, f, { source: live.source, target: live.target, fromLive: live.id }); await attachMedia(ss, f); return ss; } });
 initTranslate({ queue, history, sessKey, curGen, renderLine, addMtCost, lat, mtHist, diag, showLat });

@@ -24,6 +24,8 @@ export interface SessionDeps {
   filePause: () => void;
   flushLines: () => void;
   restoreLines: () => void;
+  /** 实时说话人:换到这个会话(没有会话时也调用,停掉上一个会话的状态) */
+  liveSpkSession: () => void;
   loadMemo: () => void;
   spkPanel: (on: boolean) => void;
   /** 翻译队列和上下文,切会话时清空 */
@@ -69,6 +71,7 @@ export function useSession(id: string | null): void {
   if (changed) {
     lines.length = 0; d.history.length = 0; d.queue.length = 0; state.nextId = 0;
     $("#log").replaceChildren(); $("#partial").textContent = "";
+    d.liveSpkSession();
     if (state.curSess) d.restoreLines();
     d.loadMemo();
   }

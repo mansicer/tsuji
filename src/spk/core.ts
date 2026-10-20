@@ -82,17 +82,51 @@ export function spkFbank(x: Float32Array): { data: Float32Array; T: number } {
   return { data: out, T };
 }
 type Vec = ArrayLike<number>;
-/** 平均连接层次聚类(余弦):相似度低于 1 - dist 就停。返回每个输入的簇号 */
-export function spkCluster(vecs: Vec[], dist: number): Int32Array {
-  const n = vecs.length, S = new Float64Array(n * n), size = new Int32Array(n).fill(1), alive = new Uint8Array(n).fill(1), lab = Int32Array.from({ length: n }, (_, i) => i);
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) S[i * n + j] = S[j * n + i] = spkDot(vecs[i], vecs[j]);
+/** 两两余弦(n×n 行优先,对角线为 0),和逐对 spkDot 逐位相同 */
+export function spkSims(vecs: Vec[]): Float64Array {
+  const n = vecs.length, S = new Float64Array(n * n), D = n ? vecs[0].length : 0, X = new Float64Array(n * D);
+  for (let i = 0; i < n; i++) for (let d = 0; d < D; d++) X[i * D + d] = vecs[i][d];
+  // 一次算四对:每对仍按 d 顺序累加(和 spkDot 逐位相同),四个累加器互不依赖,快一倍多
+  for (let i = 0; i < n; i++) {
+    const a = i * D; let j = i + 1;
+    for (; j + 3 < n; j += 4) {
+      let s0 = 0, s1 = 0, s2 = 0, s3 = 0; const b0 = j * D, b1 = b0 + D, b2 = b1 + D, b3 = b2 + D;
+      for (let d = 0; d < D; d++) { const x = X[a + d]; s0 += x * X[b0 + d]; s1 += x * X[b1 + d]; s2 += x * X[b2 + d]; s3 += x * X[b3 + d]; }
+      S[i * n + j] = S[j * n + i] = s0; S[i * n + j + 1] = S[(j + 1) * n + i] = s1; S[i * n + j + 2] = S[(j + 2) * n + i] = s2; S[i * n + j + 3] = S[(j + 3) * n + i] = s3;
+    }
+    for (; j < n; j++) { let s = 0; const b = j * D; for (let d = 0; d < D; d++) s += X[a + d] * X[b + d]; S[i * n + j] = S[j * n + i] = s; }
+  }
+  return S;
+}
+/**
+ * 平均连接层次聚类(余弦):相似度低于 1 - dist 就停。返回每个输入的簇号。
+ * 每行缓存右上三角(j > i)里最大的相似度和它的列(同值取最小的 j),每次合并只重算受影响的行:
+ * 合并顺序、平局取法、数值都和逐对全扫一遍完全一样,但一般是 O(n²) 而不是 O(n³)。
+ * S 可以传入已算好的 spkSims(vecs)(会被改写)
+ */
+export function spkCluster(vecs: Vec[], dist: number, S: Float64Array = spkSims(vecs)): Int32Array {
+  const n = vecs.length, size = new Int32Array(n).fill(1), alive = new Uint8Array(n).fill(1), lab = Int32Array.from({ length: n }, (_, i) => i);
+  const bv = new Float64Array(n), bc = new Int32Array(n);
+  const row = (i: number) => {
+    let v = -Infinity, c = -1;
+    for (let j = i + 1; j < n; j++) if (alive[j] && S[i * n + j] > v) { v = S[i * n + j]; c = j; }
+    bv[i] = v; bc[i] = c;
+  };
+  for (let i = 0; i < n; i++) row(i);
   for (;;) {
-    let best = -Infinity, bi = -1, bj = -1;
-    for (let i = 0; i < n; i++) if (alive[i]) for (let j = i + 1; j < n; j++) if (alive[j] && S[i * n + j] > best) { best = S[i * n + j]; bi = i; bj = j; }
+    let best = -Infinity, bi = -1;
+    for (let i = 0; i < n; i++) if (alive[i] && bc[i] >= 0 && bv[i] > best) { best = bv[i]; bi = i; }
     if (bi < 0 || best < 1 - dist) break;
+    const bj = bc[bi];
     for (let k = 0; k < n; k++) if (alive[k] && k !== bi && k !== bj) S[bi * n + k] = S[k * n + bi] = (size[bi] * S[bi * n + k] + size[bj] * S[bj * n + k]) / (size[bi] + size[bj]);
     size[bi] += size[bj]; alive[bj] = 0;
     for (let k = 0; k < n; k++) if (lab[k] === bj) lab[k] = bi;
+    row(bi);
+    for (let k = 0; k < n; k++) {
+      if (!alive[k] || k === bi) continue;
+      if (bc[k] === bi || bc[k] === bj) row(k); // 这一行的最大值变了或那一列没了:整行重算
+      else if (k < bi) { const v = S[k * n + bi]; if (v > bv[k] || (v === bv[k] && bi < bc[k])) { bv[k] = v; bc[k] = bi; } }
+    }
   }
   return lab;
 }
