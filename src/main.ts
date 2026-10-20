@@ -18,6 +18,7 @@ import { asrPrompt, keywords, glossaryForLLM, SYSTEM, SCHEMA } from "./prompts";
 import { WEB_SEARCH_PER_CALL, asrCost, mtCost } from "./cost";
 import { state, cfg, lines } from "./state";
 import { $, el, flash, flashBtn, download } from "./dom";
+import { initSessions, saveSessions, sget, sset, sessTemplate, newSession, useSession, refreshTemplate, migrateToSessions, fileName, renderSessions } from "./sessions";
 
 // ---------- 小工具 ----------
 // 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
@@ -100,78 +101,7 @@ function saveAudioSettings() {
   for (const [id, d] of Object.entries(AUDIO_DEFAULTS)) { const e = $("#" + id), v = e.type === "checkbox" ? String(e.checked) : e.value; sset(id, v === String(d) ? null : v); }
 }
 // ---------- 会话 ----------
-// 会话 = {id, name, tplId, source, target, settings, createdAt, updatedAt, count};字幕存在 IndexedDB 的 lines:<id>
-// settings 只存和默认值不同的项;没有会话时这些项存在 sessDefaults,作为新会话的初始值
-const SESSION_KEYS = ["asrModel", "mtModel", "mtEffort", ...Object.keys(AUDIO_DEFAULTS), "showSrc", "tgtSize"];
 state.sessions = store.json("sessions", []); state.curSess = null; state.sessDefaults = store.json("sessDefaults", {});
-function saveSessions() { store.set("sessions", JSON.stringify(state.sessions)); }
-function sessSettings() { return state.curSess ? (state.curSess.settings ||= {}) : state.sessDefaults; }
-function sget(k, d) { const v = sessSettings()[k]; return v == null ? d : String(v); }
-function sset(k, v) { const o = sessSettings(); if (v == null) delete o[k]; else o[k] = String(v); if (state.curSess) saveSessions(); else store.set("sessDefaults", JSON.stringify(state.sessDefaults)); }
-function sessTemplate(ss) { return ss && getTemplate(ss.tplId); }
-function fmtWhen(ms) { return new Date(ms).toLocaleString(getUiLang() === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
-function newSession(tplId) {
-  const tp = getTemplate(tplId) || builtins()[0], now = Date.now();
-  const ss = { id: "s" + now.toString(36) + Math.random().toString(36).slice(2, 6), name: tp.name + " · " + fmtWhen(now), tplId: tp.id, source: tp.source, target: tp.target,
-    settings: { ...(state.curSess ? state.curSess.settings : state.sessDefaults) }, createdAt: now, updatedAt: now, count: 0 };
-  state.sessions.push(ss); saveSessions(); useSession(ss.id);
-  return ss;
-}
-// 切换会话:收音中先停;重新读该会话的设置和字幕
-function useSession(id) {
-  const ss = state.sessions.find((x) => x.id === id) || null;
-  const changed = ss !== state.curSess;
-  if (changed && state.running) stop();
-  if (changed && fileJob.active) filePause();
-  if (changed) flushLines();
-  state.curSess = ss; store.set("curSession", ss ? ss.id : null);
-  if (changed) { state.spk = null; spkPanel(false); }
-  loadSettings(); refreshTemplate();
-  if (changed) {
-    lines.length = 0; history.length = 0; queue.length = 0; state.nextId = 0;
-    $("#log").replaceChildren(); $("#partial").textContent = "";
-    if (state.curSess) restoreLines();
-    loadMemo();
-  }
-}
-// 会话引用模板:模板改了(补词表等)这里重新取;语言用会话自己的
-function refreshTemplate() {
-  const tp = sessTemplate(state.curSess) || builtins().find((x) => x.id === "general");
-  cfg.tpl = state.curSess ? { ...tp, source: state.curSess.source, target: state.curSess.target } : tp;
-  cfg.glossary = parseGlossary(tp.glossary);
-  $("#srcLang").value = cfg.tpl.source; $("#tgtLang").value = cfg.tpl.target;
-  $("#curTplName").textContent = state.curSess ? t("set.sessCur", { name: state.curSess.name }) + "\n" + t("set.curTpl", { name: tp.name }) : t("set.sessNone");
-  $("#langSec .two").hidden = $("#editCurTpl").hidden = !state.curSess;
-  if (state.running && state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() }));
-  if (state.view === "live" && state.curSess) $("#title").textContent = state.curSess.name;
-}
-function deleteSession(id) {
-  bumpGen(id);
-  state.sessions = state.sessions.filter((x) => x.id !== id); saveSessions(); state.lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
-  if (state.curSess && state.curSess.id === id) useSession(state.sessions.length ? [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
-}
-// 旧版数据(字幕按模板存、设置全局存)升级成会话:每个有字幕的模板一个会话,当前设置带进去。只复制,不删旧数据
-function migrateToSessions() {
-  if (store.get("sessMigrated", null)) return;
-  const legacy = {};
-  for (const k of SESSION_KEYS) { const v = store.get(k, null); if (v != null) legacy[k] = v; }
-  if (legacy.showSrc == null && store.get("showJa", null) != null) legacy.showSrc = store.get("showJa", null);
-  if (legacy.tgtSize == null && store.get("zhSize", null) != null) legacy.tgtSize = store.get("zhSize", null);
-  if (legacy.tgtSize === "24") delete legacy.tgtSize;
-  if (legacy.showSrc === "1") delete legacy.showSrc;
-  state.sessDefaults = { ...legacy }; store.set("sessDefaults", JSON.stringify(state.sessDefaults));
-  const cur = store.get("current", null);
-  for (const tp of allTemplates()) {
-    const arr = store.json("lines." + tp.id, []);
-    if (!arr.length) continue;
-    const first = arr[0].t || Date.now(), last = arr[arr.length - 1].t || first;
-    const ss = { id: "s" + first.toString(36) + Math.random().toString(36).slice(2, 6), name: tp.name + " · " + fmtWhen(first), tplId: tp.id, source: tp.source, target: tp.target,
-      settings: { ...legacy }, createdAt: first, updatedAt: last, count: arr.length };
-    state.sessions.push(ss); state.lineStore.set(ss.id, arr);
-    if (tp.id === cur || !store.get("curSession", null)) store.set("curSession", ss.id);
-  }
-  saveSessions(); store.set("sessMigrated", "1");
-}
 
 function loadSettings() {
   $("#secSpk").hidden = !isFileSess();
@@ -1219,41 +1149,6 @@ function spkSetOn(on) {
   spkAuto();
 };
 
-// ---------- 会话列表 ----------
-function sessTranscript(arr) { return arr.filter((l) => l.src || l.tgt).map((l) => `[${l.s != null ? fmtClock(l.s) : new Date(l.t).toTimeString().slice(0, 8)}] ${l.tgt}\n           ${l.src}`).join("\n"); }
-function fileName(name) { return (name || "subs").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60); }
-function renderSessions() {
-  $("#noKey").hidden = cfg.hasKey;
-  const list = $("#sessList");
-  list.replaceChildren();
-  if (!state.sessions.length) { list.append(el("div", { className: "emptyList", textContent: t("home.noSessions") })); return; }
-  for (const ss of [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)) {
-    const tp = sessTemplate(ss), cur = state.curSess && state.curSess.id === ss.id;
-    const h = el("h3", { textContent: ss.name });
-    h.append(el("span", { className: "tag", textContent: t(ss.kind === "file" ? "sess.file" : "sess.live") }));
-    if (cur) h.append(el("span", { className: "tag", textContent: t("card.current") }));
-    const btn = (key, fn, primary, icon) => el("button", { className: "btn" + (primary ? " primary" : "") + " i-" + icon, textContent: t(key), onclick: fn });
-    const rename = () => {
-      const inp = el("input", { type: "text", value: ss.name });
-      const done = () => { const v = inp.value.trim(); if (v && v !== ss.name) { ss.name = v; saveSessions(); if (cur) refreshTemplate(); } renderSessions(); };
-      inp.onkeydown = (e) => { if (e.key === "Enter") inp.blur(); if (e.key === "Escape") { inp.value = ss.name; inp.blur(); } };
-      inp.onblur = done; h.replaceChildren(inp); inp.focus(); inp.select();
-    };
-    const del = btn("sess.del", () => {
-      if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = t("sess.delSure"); setTimeout(() => { delete del.dataset.armed; del.textContent = t("sess.del"); }, 3000); return; }
-      deleteSession(ss.id); renderSessions();
-    }, false, "trash");
-    list.append(el("div", { className: "card" + (cur ? " current" : "") }, h,
-      el("div", { className: "meta", textContent: t("sess.meta", { tpl: tp ? tp.name : t("sess.tplMissing"), src: srcName(ss.source), tgt: tgtName(ss.target) }) }),
-      el("div", { className: "when", textContent: t("sess.when", { time: fmtWhen(ss.updatedAt), n: ss.count || 0 }) + (ss.kind === "file" && ss.file && ss.file.duration ? " · " + fmtClock(ss.file.duration) : "") }),
-      el("div", { className: "btns" },
-        btn("sess.continue", () => { useSession(ss.id); show("live"); }, true, "play"),
-        btn("sess.rename", rename, false, "edit"),
-        btn("sess.export", () => download(fileName(ss.name) + ".txt", sessTranscript(state.lineStore.get(ss.id))), false, "download"),
-        del)));
-  }
-}
-
 // ---------- 模板列表 ----------
 function renderHome() {
   $("#noKey").hidden = cfg.hasKey;
@@ -1619,6 +1514,7 @@ $("#recap").onclick = async (e) => {
 };
 
 // ---------- 启动 ----------
+initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
 // 旧版(单一节目,subs.html)的字幕记录复制到内置模板下。旧版页面和这里同源、共用存储,所以只复制不删除
 if (store.get("lines", null) && !store.get("lines.hoooope-2026", null)) store.set("lines.hoooope-2026", store.get("lines", null));
 buildTicks();
