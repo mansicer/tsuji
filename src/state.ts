@@ -28,7 +28,16 @@ export interface Session {
   createdAt: number; updatedAt: number; count: number;
   /** 文件会话才有 kind / file / progress / done;实时会话没有 kind */
   kind?: "file"; file?: SessionFile; progress?: number; done?: boolean;
+  /** 实时会话的录音(见 live-record.ts);recSession = 由录音转成的文件会话 */
+  rec?: RecInfo; recSession?: string;
+  /** 文件会话:由哪个实时会话的录音转来 */
+  fromLive?: string;
 }
+
+/** 录音的一段:每次开始收音(含重开麦克风)一段。t0 / t1 = 墙钟起止毫秒;at = 开始时的会话音频时钟(有 live-audio.ts 时才有) */
+export interface RecPart { t0: number; t1: number; at?: number; mime: string; bytes: number }
+/** 录音:on = 本会话开了录音(只对本会话);bytes = 总大小。块存 IndexedDB 的 rec:<会话 id>:<段号>:<块号> */
+export interface RecInfo { on: boolean; bytes: number; parts: RecPart[] }
 
 /** 页面上的一行字幕(存储格式见 linestore.ts 的 SavedLine 和 main.ts 的 saveLines) */
 export interface Line {

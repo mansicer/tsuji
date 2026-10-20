@@ -19,6 +19,7 @@ import { initSessions, saveSessions, sget, sset, sessTemplate, newSession, useSe
 import { initTranslate, pumpTranslate, apiHeaders, loadMemo, setMemo } from "./translate";
 import { creator, openCreator, renderCreator, initCreator } from "./creator";
 import { liveAudio, lineAudio } from "./live-audio";
+import { initRecord, recBegin, recEnd, recUi } from "./live-record";
 import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
 
 // ---------- 小工具 ----------
@@ -486,6 +487,7 @@ async function start() {
   $("#go").textContent = t("live.stop"); $("#go").classList.add("stop");
   keepAwake();
   connect();
+  recBegin(stream); recUi();
 }
 function stop() {
   state.running = false;
@@ -494,6 +496,7 @@ function stop() {
   if (liveBuf) liveFlush();
   liveAudio.stop(); wsSending = false; clockLines = new WeakSet();
   if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
+  recEnd(); // 先结束录音这一段,再停麦克风
   if (stream) stream.getTracks().forEach((x) => x.stop());
   if (actx) actx.close();
   stream = actx = tap = rs = null; agc = new Agc();
@@ -532,11 +535,13 @@ async function restartMic() {
   if (micRestarting) return;
   micRestarting = true; lastRestartAt = performance.now();
   try {
+    recEnd(); // 流换了:旧段结束,新流上开新的一段
     if (stream) stream.getTracks().forEach((x) => x.stop());
     if (actx) actx.close().catch(() => {});
     stream = actx = tap = rs = null;
     await startMic();
     lastSampleAt = performance.now();
+    recBegin(stream);
   } catch (e) {
     console.error(e);
     setStatus("status.micCant", "err");
@@ -618,25 +623,31 @@ async function loadMedia(id: string): Promise<File | null> {
 }
 function pickMedia(tplId: string): void { pickFor = { tplId }; $("#mediaFile").value = ""; $("#mediaFile").click(); }
 $("#reattach").onclick = () => { pickFor = { reattach: state.curSess!.id }; $("#mediaFile").value = ""; $("#mediaFile").click(); };
-$("#mediaFile").onchange = async () => {
-  const f = $("#mediaFile").files[0]; if (!f || !pickFor) return;
-  let ss: Session;
-  if (pickFor.reattach) ss = state.sessions.find((x) => x.id === pickFor!.reattach)!;
-  else {
-    ss = newSession(pickFor.tplId!);
-    Object.assign(ss, { kind: "file", name: f.name.replace(/\.[^.]+$/, ""), file: { name: f.name, size: f.size, type: f.type, duration: 0 }, progress: 0, done: false });
-    saveSessions();
-  }
-  pickFor = null; state.mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
+// 新建文件会话(选文件、实时录音转文件共用);extra 覆盖默认字段
+function newFileSession(tplId: string, f: File, extra: Partial<Session> = {}): Session {
+  const ss = newSession(tplId);
+  Object.assign(ss, { kind: "file", name: f.name.replace(/\.[^.]+$/, ""), file: { name: f.name, size: f.size, type: f.type, duration: 0 }, progress: 0, done: false }, extra);
+  saveSessions(); return ss;
+}
+// 文件存进本地,切到这个会话
+async function attachMedia(ss: Session, f: File): Promise<void> {
+  state.mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
   ss.file!.stored = await storeMedia(ss.id, f);
   if (!ss.file!.stored) flash(t("file.noStore"));
   saveSessions(); useSession(ss.id); show("live");
   if (ss.done) spkAuto(ss);
+}
+$("#mediaFile").onchange = async () => {
+  const f = $("#mediaFile").files[0]; if (!f || !pickFor) return;
+  const ss = pickFor.reattach ? state.sessions.find((x) => x.id === pickFor!.reattach)! : newFileSession(pickFor.tplId!, f);
+  pickFor = null;
+  await attachMedia(ss, f);
 };
 async function setupFileView() {
   const on = isFileSess();
   document.body.classList.toggle("filemode", on);
   $("#playerBox").hidden = $("#fileBar").hidden = !on;
+  recUi();
   if (!on) { $("#go").textContent = t(state.running ? "live.stop" : "live.start"); return; }
   const ss = state.curSess!;
   if (!state.mediaBlob || fileJob.sid !== ss.id) { state.mediaBlob = await loadMedia(ss.id) || (state.mediaBlob && state.mediaBlob.name === ss.file!.name && fileJob.sid == null ? state.mediaBlob : null); fileJob.sid = ss.id; fileJob.pcm = null; }
@@ -896,7 +907,7 @@ $("#uiLang").onchange = () => {
   setUiLang($("#uiLang").value); store.set("uiLang", getUiLang());
   applyI18n(); applySettings(); listMics(); setStatus(statusKey, statusKind, statusExtra); setFollow(follow); showLat();
   $("#go").textContent = t(state.running ? "live.stop" : "live.start");
-  refreshTemplate(); if (state.view === "home") renderSessions(); if (state.view === "tpl") renderHome();
+  recUi(); refreshTemplate(); if (state.view === "home") renderSessions(); if (state.view === "tpl") renderHome();
 };
 ["#asrModel", "#mtModel", "#ctModel"].forEach((s) => $(s).addEventListener("change", showModelHints));
 $("#editCurTpl").onclick = () => { $("#settings").hidden = true; openCreator(sessTemplate(state.curSess) || cfg.tpl); };
@@ -970,6 +981,8 @@ $("#recap").onclick = async (e: MouseEvent) => {
 // ---------- 启动 ----------
 // init* 必须在下面第一个 await 之前调用:在那之前模块代码同步执行,点击等事件回调插不进来,不会用到还没注入依赖的模块
 initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
+// 录音转文件会话:同一模板、同样的语言
+initRecord({ saveSessions, getStream: () => stream, audioNow: () => liveAudio.now(), toFileSession: async (live, f) => { const ss = newFileSession(live.tplId, f, { source: live.source, target: live.target, fromLive: live.id }); await attachMedia(ss, f); return ss; } });
 initTranslate({ queue, history, sessKey, curGen, renderLine, addMtCost, lat, mtHist, diag, showLat });
 // 旧版(单一节目,subs.html)的字幕记录复制到内置模板下。旧版页面和这里同源、共用存储,所以只复制不删除
 if (store.get("lines", null) && !store.get("lines.hoooope-2026", null)) store.set("lines.hoooope-2026", store.get("lines", null));

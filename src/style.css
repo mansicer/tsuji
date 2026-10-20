@@ -421,3 +421,17 @@ body.filemode #go::before { width: 14px; height: 14px; }
 #memoBox summary { cursor: pointer; color: var(--fg); font-size: 14px; padding: 4px 0; }
 #memoList { margin: 6px 0 8px; padding-left: 22px; font-size: 13px; line-height: 1.5; color: var(--dim); }
 #memoList li.empty { list-style: none; margin-left: -22px; }
+
+/* 实时录音:开关在「自动滚动」旁;开着标红,录音中圆点闪烁;手机上没在录时只留图标 */
+.i-rec { --ic: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Ccircle cx='12' cy='12' r='4' fill='black'/%3E%3C/svg%3E"); }
+.ctlSide:last-child { gap: 6px; }
+#recBtn::before { width: 14px; height: 14px; }
+#recBtn.on { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+#recBtn.live { font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); }
+#recBtn.live::before { width: 8px; height: 8px; border-radius: 50%; -webkit-mask: none; mask: none; animation: pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #recBtn.live::before { animation: none; } }
+@media (max-width: 560px) { #recBtn:not(.live) { font-size: 0; gap: 0; padding: 7px 9px; } #recBtn .rk { display: none; } }
+#recConfirm { margin: 0; }
+#recConfirm .btns .btn { font-size: inherit; gap: 6px; padding: 0 14px; } /* 不套用卡片按钮在手机上只留图标的规则 */
+#recBar { margin-top: 0; }
+body.filemode #recBtn, body.filemode #recBar, body.filemode #recConfirm { display: none; }
