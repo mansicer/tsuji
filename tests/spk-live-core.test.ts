@@ -172,6 +172,27 @@ describe("library", () => {
     expect(c.propose([{ id: 0, name: "Other", src: "gpt-evidence" }])).toEqual([]); // GPT 改不了 library
     expect(c.propose([{ id: 0, name: "Kal2", src: "library" }])).toHaveLength(1);
   });
+  it("with a library, new-group waits until the library had a chance (libDur), and is skipped if it named the group", () => {
+    const sp = [randVec(), randVec()], c = new LiveCore(), lib = [ent("Kal", [[sp[0], "live"]])];
+    c.deferNew = true;
+    c.add(0, 2, seg(sp[0], 0.3), 0); c.add(1, 2, seg(sp[1], 0.3), 1); c.add(2, 1.5, seg(sp[0], 0.3), 2); c.add(3, 1.5, seg(sp[1], 0.3), 3);
+    expect(c.visible()).toHaveLength(2); // 都显示了(各 2 段),但还不到 4 秒:没报 new-group
+    c.nameFromLibrary(lib, 10);
+    expect(c.events.filter((e) => e.kind === "new-group")).toEqual([]);
+    c.add(4, 1, seg(sp[0], 0.3), 4); c.add(5, 1, seg(sp[1], 0.3), 5); // 都够 4.5 秒
+    c.nameFromLibrary(lib, 20);
+    // 组 0 被声纹库认成 Kal,不报;组 1 认不出来,现在才报
+    expect(c.group(0)!.name).toBe("Kal");
+    expect(c.events.filter((e) => e.kind === "new-group")).toEqual([{ kind: "new-group", at: 20, id: 1 }]);
+    c.nameFromLibrary(lib, 30);
+    expect(c.events.filter((e) => e.kind === "new-group")).toHaveLength(1); // 只报一次
+  });
+  it("with an empty library, deferred groups are announced right away", () => {
+    const c = new LiveCore(); c.deferNew = true;
+    const a = randVec(); c.add(0, 3.5, seg(a), 0);
+    c.nameFromLibrary([], 5);
+    expect(c.events).toEqual([{ kind: "new-group", at: 5, id: 0 }]);
+  });
   it("liveLibEntries: a d = 0 v is only a placeholder for live-only people", () => {
     const v = randVec(), e = liveLibEntries({ A: { v: f32b64(v), d: 0, alts: [{ v: f32b64(v), d: 5, src: "live" }] }, B: { v: f32b64(v), d: 9 } });
     expect(e.map((x) => x.vecs.map((y) => y.src))).toEqual([["live"], ["file"]]);

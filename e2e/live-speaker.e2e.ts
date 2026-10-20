@@ -268,4 +268,57 @@ test.describe.serial("live speaker identification", () => {
     expect((await idbKeys(page)).filter((k) => k.startsWith("lspk:"))).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test("with an empty library, the GPT judge names the groups while listening", async () => {
+    test.setTimeout(300_000);
+    // 清空模板声纹库,开新会话
+    await page.evaluate(() => {
+      const tps = JSON.parse(localStorage.getItem("jls.templates") || "[]");
+      for (const tp of tps) delete tp.voices;
+      localStorage.setItem("jls.templates", JSON.stringify(tps));
+    });
+    await page.click("#toTpl");
+    await page.click("#tplList .card.current .btn.primary");
+    // 假的 GPT 判定:按请求里每组的句子(文本 → 脚本里的声音)多数决,带「自我介绍」证据回名字;翻译请求照旧走原来的假接口
+    await page.evaluate(([who, names]) => {
+      const prev = window.fetch; (window as any).__judge = [];
+      window.fetch = async (url, opt) => {
+        const body = opt && typeof opt.body === "string" ? JSON.parse(opt.body) : null;
+        if (!body || body.response_format?.json_schema?.name !== "live_speakers") return prev(url, opt);
+        const user: string = body.messages[1].content, votes: Record<string, Record<string, number>> = {};
+        for (const m of user.matchAll(/^\[([A-Z]+)(?::[^\]]*)?\] (.+)$/gm)) { const v = who[m[2].trim()]; if (v) ((votes[m[1]] ||= {})[v] = (votes[m[1]][v] || 0) + 1); }
+        const groups = Object.entries(votes).map(([id, c]) => ({ id, name: names[Object.entries(c).sort((a, b) => b[1] - a[1])[0][0]], evidence: "intro" }));
+        (window as any).__judge.push({ user, groups });
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ groups }) } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 });
+      };
+    }, [Object.fromEntries(CONV2.map((x) => [x.text, x.voice])), NAMES] as const);
+    await page.click("#go");
+    await page.waitForFunction(() => window.__ws && window.__ws.readyState === 1 && window.__t.lspk.ready);
+    const ph = await phase(page, 3000, 0);
+    const ref = await play(page, TL2, ph, "c");
+    await drained(page);
+    // 判定循环每 2 秒看一次;新组出现就会叫,最多等它跑完一轮
+    await page.waitForFunction(() => window.__t.lspk.core.visible().length === 3 && window.__t.lspk.core.visible().every((g: any) => g.name), null, { timeout: 60_000 });
+    const gs = await groups(page);
+    console.log("groups named by the judge:", JSON.stringify(gs));
+    expect(gs.map((g) => g.src)).toEqual(["gpt-evidence", "gpt-evidence", "gpt-evidence"]);
+    const L = await evalLines(page, CONV2.map((x) => x.text));
+    const r = evaluate(L, ref);
+    console.log("live run 3 (GPT names):\n" + formatReport(r));
+    expect(r.mapping.every((m) => m.pinned)).toBe(true);
+    expect(r.accuracy!).toBeGreaterThanOrEqual(0.9);
+    const calls = await page.evaluate(() => (window as any).__judge.length);
+    console.log(`judge calls: ${calls}`);
+    expect(calls).toBeGreaterThan(0);
+    expect(calls).toBeLessThan(10);
+    // 名字的来源 GPT 低于手动:手动改了以后,下一轮 GPT 也改不回去
+    const kal = TL2.find((x) => x.voice === "kal")!.text;
+    await chipOf(page, kal).click();
+    await page.click("#lspkPick .names .btn:last-child");
+    await page.fill("#lspkPick input", "Host"); await page.press("#lspkPick input", "Enter");
+    expect(await page.evaluate(() => window.__t.liveSpk()!.propose([{ id: window.__t.lines.find((l: any) => l.lspk?.name === "Host").lspk.g, name: "Kal", src: "gpt-evidence" }]).changed)).toBe(false);
+    await expect(chipOf(page, kal)).toHaveText("Host");
+    await page.click("#go");
+    expect(errors).toEqual([]);
+  });
 });

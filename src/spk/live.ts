@@ -128,6 +128,7 @@ async function pump() {
       perf.embedMs += performance.now() - t0;
       const ids = new Set(lines.map((x) => x.id));
       for (const s of [...core.segs]) if (!ids.has(s.line)) core.drop(s.line);
+      core.deferNew = lib().length > 0;
       core.add(l.id, pcm.length / 16000, vec, Date.now());
       if (core.due(Date.now(), lastRecluster)) recluster();
       core.nameFromLibrary(lib());

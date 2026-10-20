@@ -90,6 +90,9 @@ export class LiveCore {
   segs: LiveSeg[] = [];
   gs = new Map<number, CoreGroup>();
   events: CoreEvent[] = [];
+  /** 模板有声纹库时为 true:新组先不报 new-group,等声纹库对照过(够 libDur 秒)还没认出来再报,免得 GPT 抢在声纹库前面 */
+  deferNew = false;
+  private pendingNew = new Set<number>();
   next = 0;
   /** 上次整体重新聚类之后新增的片段数 */
   fresh = 0;
@@ -120,7 +123,9 @@ export class LiveCore {
     this.gs.delete(old); this.gs.set(g.id, g);
     for (const s of this.segs) if (s.g === old) s.g = g.id;
     const from = g.splitFrom != null ? this.gs.get(g.splitFrom) : undefined;
-    this.events.push(from && from.visible ? { kind: "split", at: now, id: g.id, other: from.id } : { kind: "new-group", at: now, id: g.id });
+    if (from && from.visible) this.events.push({ kind: "split", at: now, id: g.id, other: from.id });
+    else if (this.deferNew) this.pendingNew.add(g.id);
+    else this.events.push({ kind: "new-group", at: now, id: g.id });
     delete g.splitFrom;
   }
   /** 最近的已显示组(余弦 ≥ min) */
@@ -221,11 +226,21 @@ export class LiveCore {
     g.name = nm; g.src = nm ? "manual" : null; return true;
   }
   /** 声纹库给已显示、够长、还没名字或名字来源更低的组起名(同名已被别的组占用的跳过) */
-  nameFromLibrary(lib: LiveLibEntry[]): NameChange[] {
-    if (!lib.length) return [];
+  nameFromLibrary(lib: LiveLibEntry[], now = Date.now()): NameChange[] {
+    if (!lib.length) { this.announce(now, true); return []; }
     const vis = this.visible(), taken = (nm: string, id: number) => vis.some((g) => g.id !== id && g.name && g.name.toLowerCase() === nm.toLowerCase());
     const hits = libMatch(vis.map((g) => ({ id: g.id, cent: g.cent, dur: g.dur })), lib, this.C).filter((m) => !taken(m.name, m.id));
-    return this.propose(hits.map((m) => ({ id: m.id, name: m.name, src: "library" as const })));
+    const ch = this.propose(hits.map((m) => ({ id: m.id, name: m.name, src: "library" as const })));
+    this.announce(now, false);
+    return ch;
+  }
+  /** 挂起的新组:声纹库已经对照过(够 libDur 秒,或 all)还没名字就报 new-group;合并掉的、已有名字的直接丢 */
+  private announce(now: number, all: boolean) {
+    for (const id of this.pendingNew) {
+      const g = this.gs.get(id);
+      if (!g || !g.visible || g.name) { this.pendingNew.delete(id); continue; }
+      if (all || g.dur >= this.C.libDur) { this.events.push({ kind: "new-group", at: now, id }); this.pendingNew.delete(id); }
+    }
   }
   /** 最近一段时间的事件 */
   recent(now: number): CoreEvent[] { this.events = this.events.filter((e) => e.at > now - this.C.eventsMs); return this.events; }

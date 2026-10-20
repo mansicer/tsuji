@@ -22,6 +22,7 @@ import { liveAudio, lineAudio } from "./live-audio";
 import { initRecord, recBegin, recEnd, recUi } from "./live-record";
 import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
 import * as spkEngine from "./spk/engine";
+import { startLiveJudge, stopLiveJudge } from "./spk/live-judge";
 import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug } from "./spk/live";
 
 // ---------- 小工具 ----------
@@ -493,12 +494,14 @@ async function start() {
   connect();
   recBegin(stream); recUi();
   liveSpkStart(); // 说话人识别:模型在后台加载,字幕不等它
+  startLiveJudge({ api: liveSpk, cfg: () => cfg, apiHeaders, addMtCost }); // 说话人识别关着时 liveSpk() 为 null,循环空转
 }
 function stop() {
   state.running = false;
   speechSince = 0;
   clearTimeout(reconnectTimer);
   if (liveBuf) liveFlush();
+  stopLiveJudge();
   liveSpkStop(); // 先把还在排队的句子的音频切出来
   liveAudio.stop(); wsSending = false; clockLines = new WeakSet();
   if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
