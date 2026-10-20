@@ -257,6 +257,8 @@ function renderLine(line: Line, merge = true): void {
   scrollEnd();
 }
 function scrollEnd() { if (follow) { const m = $("#log"); m.scrollTop = m.scrollHeight; } }
+// 底部栏变高(停止后出现「存入声纹库」「转成文件会话」等)时字幕区变矮:跟随中就重新滚到底,别让最新一句被挡住
+new ResizeObserver(() => scrollEnd()).observe(document.querySelector("footer")!);
 $("#log").addEventListener("scroll", () => {
   const m = $("#log");
   const atEnd = m.scrollHeight - m.scrollTop - m.clientHeight < 40;

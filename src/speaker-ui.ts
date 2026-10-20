@@ -39,7 +39,7 @@ export interface SpeakerDeps {
 }
 let D: SpeakerDeps;
 
-export const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e64980", "#5c7cfa"];
+export const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#b7791f", "#0c8599", "#e64980", "#5c7cfa"];
 let spkBusy = false;
 // 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
 const SPK_SHARE = 0.85;
