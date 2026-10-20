@@ -83,7 +83,7 @@ export const state = {
   translating: false,
   view: "home" as View,
   /** 文件会话的原文件 */
-  mediaBlob: null as Blob | null,
+  mediaBlob: null as File | null,
   /** 实时转写的 WebSocket */
   ws: null as WebSocket | null,
   /** 字幕存储;启动时 loadLineStore 换成 IndexedDB 或 localStorage 的,之前先用不持久化的 */

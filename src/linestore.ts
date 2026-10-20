@@ -1,8 +1,19 @@
 // 字幕记录的持久化。localStorage 每个站点只有约 5 MB,会话多了会写满,所以存 IndexedDB;
 // 启动时全部读进内存,读取保持同步(切换会话、导出时不用等)。写入失败交给 onError 提示用户。
 
+import type { Basis } from "./spk/judge";
+
 /** 存储里的一行字幕(字段见 main.ts 的 saveLines) */
-export interface SavedLine { id: number; raw?: string; src?: string; tgt?: string; t?: number; done?: boolean; [k: string]: unknown }
+export interface SavedLine {
+  id: number; raw?: string; src?: string; tgt?: string; t?: number; done?: boolean;
+  /** 文件会话:在媒体里的起止毫秒 */
+  s?: number; e?: number;
+  /** 说话人:名字、颜色序号、GPT 判定依据 */
+  k?: string; kc?: number; kb?: Basis;
+  /** 很早的版本把原文 / 译文存成 ja / zh */
+  ja?: string; zh?: string;
+  [k: string]: unknown;
+}
 
 /** 键值存储后端:IndexedDB,不可用时退回 localStorage */
 export interface KV {
