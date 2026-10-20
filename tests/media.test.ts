@@ -18,6 +18,15 @@ describe("splitTimed", () => {
     expect(texts(splitTimed("Wait... what?! No", 0, 1000, false))).toEqual(["Wait...", "what?!", "No"]);
   });
 
+  it("keeps a period inside a word or number with its sentence instead of dropping the text before it", () => {
+    expect(texts(splitTimed("It costs 3.5 dollars. Fine", 0, 1000, false))).toEqual(["It costs 3.5 dollars.", "Fine"]);
+    expect(texts(splitTimed("We meet at 10.30 today. See you", 0, 1000, false))).toEqual(["We meet at 10.30 today.", "See you"]);
+    expect(texts(splitTimed("Visit example.com now. OK", 0, 1000, false))).toEqual(["Visit example.com now.", "OK"]);
+    // 缩写后面跟空格时仍会断开(没法和句末区分),但不会丢字
+    expect(texts(splitTimed("U.S. sales grew 2.5%. Great", 0, 1000, false))).toEqual(["U.S.", "sales grew 2.5%.", "Great"]);
+    expect(texts(splitTimed("pi is 3.14", 0, 1000, false))).toEqual(["pi is 3.14"]);
+  });
+
   it("drops punctuation-only parts but still counts their length for timing", () => {
     const r = splitTimed("はい。……。いいえ。", 0, 900, true);
     expect(texts(r)).toEqual(["はい。", "いいえ。"]);
