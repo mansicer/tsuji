@@ -941,6 +941,7 @@ $("#recap").onclick = async (e) => {
 };
 
 // ---------- 启动 ----------
+// init* 必须在下面第一个 await 之前调用:在那之前模块代码同步执行,点击等事件回调插不进来,不会用到还没注入依赖的模块
 initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
 initTranslate({ queue, history, sessKey, curGen, renderLine, addMtCost, lat, mtHist, diag, showLat });
 // 旧版(单一节目,subs.html)的字幕记录复制到内置模板下。旧版页面和这里同源、共用存储,所以只复制不删除
