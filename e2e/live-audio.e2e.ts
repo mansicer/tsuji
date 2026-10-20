@@ -2,16 +2,17 @@
 // 假 WebSocket 按 WAV 里的说话时间发 VAD 事件,检查字幕的 aStart / aEnd 和 slice() 取回的音频
 import type { Page } from "@playwright/test";
 import { test, expect, openApp, reload, start } from "./fixtures";
-import { fliteWav } from "../scripts/flite-wav.mjs";
+import { ttsConversation } from "./tts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const WAV = join(tmpdir(), `tsuji-live-audio-${process.pid}.wav`), TAIL = 2000;
-const marks: { start: number; end: number }[] = fliteWav(WAV, [
-  { voice: "awb", text: "Good morning everyone, thanks for joining.", gap: 1000 },
-  { voice: "slt", text: "Happy to be here today.", gap: 1500 },
-], TAIL);
-const LOOP = marks[1].end + TAIL; // WAV 总长;假麦克风循环播放
+// trim: "rms" 让每句的起止贴着有声部分(下面的静音检查只留 120 ms 余量)
+const conv = ttsConversation([
+  { voice: "awb", text: "Good morning everyone, thanks for joining.", gapMs: 1000 },
+  { voice: "slt", text: "Happy to be here today.", gapMs: 1500 },
+], { tailMs: 2000, trim: "rms", out: join(tmpdir(), `tsuji-live-audio-${process.pid}.wav`) });
+const WAV = conv.path, marks = conv.timeline.map((t) => ({ start: t.startMs, end: t.endMs }));
+const LOOP = conv.durationMs; // WAV 总长;假麦克风循环播放
 test.use({ launchOptions: {
   executablePath: process.env.CHROMIUM_PATH || undefined,
   args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${WAV}`],

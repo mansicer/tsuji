@@ -49,6 +49,8 @@ export interface RecDeps {
   toFileSession(live: Session, f: File): Promise<Session>;
   /** 会话音频时钟(live-audio.ts);没有就只记墙钟 */
   audioNow?: () => number | null;
+  /** 切到某个会话(已经转过的录音直接打开那个文件会话) */
+  openSession(id: string): void;
 }
 let D: RecDeps;
 let mr: MediaRecorder | null = null, confirmSid = "", converting = false;
@@ -114,6 +116,13 @@ export function recUi(): void {
   const has = live && !state.running && !mr && recCount(rec) > 0;
   $("#recBar").hidden = !has;
   if (has && !converting) $("#recInfo").textContent = t("lrec.info", { n: recCount(rec), dur: fmtClock(recDur(rec!)), size: fmtBytes(rec!.bytes) });
+  // 转过了、文件会话还在:按钮改成打开它;文件会话被删了才再转
+  const c = $("#recConvert"), k = live && convertedTo(ss!) ? "lrec.open" : "lrec.convert";
+  c.dataset.i18n = k; c.textContent = t(k);
+}
+/** 这个实时会话的录音转成的、还在的文件会话 */
+function convertedTo(ss: Session): Session | undefined {
+  return ss.recSession ? state.sessions.find((x) => x.id === ss.recSession) : undefined;
 }
 function setOn(on: boolean): void {
   const ss = state.curSess; if (!ss || ss.kind === "file") return;
@@ -122,10 +131,13 @@ function setOn(on: boolean): void {
   recUi();
 }
 
-/** 录音转文件会话:一段直接用;几段用 ffmpeg.wasm 接成一个同格式的文件。新会话用同一模板和语言,两边互相记着 */
+/** 录音转文件会话:一段直接用;几段用 ffmpeg.wasm 接成一个同格式的文件。新会话用同一模板和语言,两边互相记着。
+ *  已经转过、那个文件会话还在,就直接切过去,不再建新的 */
 async function recConvert(): Promise<void> {
   const ss = state.curSess;
   if (!ss || !ss.rec || state.running || mr || converting) return;
+  const done = convertedTo(ss);
+  if (done) return D.openSession(done.id);
   converting = true; $("#recConvert").disabled = true;
   const info = (s: string) => ($("#recInfo").textContent = s);
   try {

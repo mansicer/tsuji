@@ -2,15 +2,15 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { test, expect, openApp, start, translated, idbKeys, deleteSession } from "./fixtures";
-import { fliteWav } from "./flite";
+import { test, expect, openApp, start, translated, idbKeys, deleteSession, openSession } from "./fixtures";
+import { ttsConversation } from "./tts";
 
-const WAV = join(tmpdir(), `tsuji-record-e2e-${process.pid}.wav`);
-fliteWav(WAV, [
+// 这里只要有人声,不看时间轴;按 pid 取名,各 worker 的假麦克风文件互不干扰
+const WAV = ttsConversation([
   { voice: "awb", text: "Good evening everyone, and welcome to the show." },
   { voice: "slt", text: "Thank you. It is great to be here tonight." },
   { voice: "kal", text: "Let us start with the first question." },
-]);
+], { gapMs: 400, out: join(tmpdir(), `tsuji-record-e2e-${process.pid}.wav`) }).path;
 // 只有这个文件用假麦克风文件,不影响其他测试
 test.use({ launchOptions: { executablePath: process.env.CHROMIUM_PATH || undefined, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--use-file-for-fake-audio-capture=" + WAV] } });
 
@@ -133,6 +133,47 @@ test("a single recorded part is used as is", async ({ page }) => {
   const fs = await sess(page, await page.evaluate(() => localStorage.getItem("jls.curSession")!));
   expect(fs.file).toMatchObject({ type: "audio/webm", size: n, stored: true });
   expect(fs.name).toMatch(/^A · (录音|recording)$/);
+});
+
+test("converting again opens the existing file session; after it is deleted it converts anew", async ({ page }) => {
+  const errors = await openApp(page);
+  await page.click("#recBtn"); await page.click("#recOk");
+  await start(page);
+  await page.waitForTimeout(2500);
+  await page.click("#go");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("jls.sessions")!)[0].rec.parts[0].bytes > 0);
+  await expect(page.locator("#recConvert")).toHaveText(/转成文件会话|Convert/);
+  await page.click("#recConvert");
+  await page.waitForFunction(() => localStorage.getItem("jls.curSession") !== "sA");
+  const fid = await page.evaluate(() => localStorage.getItem("jls.curSession")!);
+  const count = () => page.evaluate(() => JSON.parse(localStorage.getItem("jls.sessions")!).length);
+  const n = await count();
+
+  // 回到实时会话再点:直接切到已有的文件会话,不建新的,recSession 不变
+  await openSession(page, "A");
+  await expect(page.locator("#recBar")).toBeVisible();
+  await expect(page.locator("#recConvert")).toHaveText(/打开转好的文件会话|Open the converted file session/);
+  await page.click("#recConvert");
+  await page.waitForFunction((f) => localStorage.getItem("jls.curSession") === f, fid);
+  await expect(page.locator("body.filemode")).toHaveCount(1);
+  expect(await count()).toBe(n);
+  expect((await sess(page, "sA")).recSession).toBe(fid);
+
+  // 删掉文件会话:实时会话的 recSession 跟着清掉,按钮回到「转换」,再点建一个新的
+  await page.click("#toHome");
+  const trash = page.locator("#sessList .card").filter({ has: page.locator("h3", { hasText: /^A · (录音|recording)/ }) }).locator(".i-trash");
+  await trash.click(); await trash.click(); // 点两次确认
+  await page.waitForFunction((f) => !JSON.parse(localStorage.getItem("jls.sessions")!).some((s: any) => s.id === f), fid);
+  expect((await sess(page, "sA")).recSession).toBeUndefined();
+  await page.click(`#sessList .card:has(h3:text-is('A')) .btn.primary`);
+  await expect(page.locator("#recConvert")).toHaveText(/转成文件会话|Convert/);
+  await page.click("#recConvert");
+  await page.waitForFunction((f) => { const c = localStorage.getItem("jls.curSession"); return c !== "sA" && c !== f; }, fid);
+  const fid2 = await page.evaluate(() => localStorage.getItem("jls.curSession")!);
+  expect((await sess(page, "sA")).recSession).toBe(fid2);
+  expect(await sess(page, fid2)).toMatchObject({ kind: "file", fromLive: "sA" });
+  expect(await count()).toBe(n);
+  expect(errors).toEqual([]);
 });
 
 test("turning recording off mid-session ends the part; another session is not recorded", async ({ page }) => {

@@ -983,7 +983,7 @@ $("#recap").onclick = async (e: MouseEvent) => {
 // init* 必须在下面第一个 await 之前调用:在那之前模块代码同步执行,点击等事件回调插不进来,不会用到还没注入依赖的模块
 initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
 // 录音转文件会话:同一模板、同样的语言
-initRecord({ saveSessions, getStream: () => stream, audioNow: () => liveAudio.now(), toFileSession: async (live, f) => { const ss = newFileSession(live.tplId, f, { source: live.source, target: live.target, fromLive: live.id }); await attachMedia(ss, f); return ss; } });
+initRecord({ saveSessions, getStream: () => stream, audioNow: () => liveAudio.now(), openSession: (id) => { useSession(id); show("live"); }, toFileSession: async (live, f) => { const ss = newFileSession(live.tplId, f, { source: live.source, target: live.target, fromLive: live.id }); await attachMedia(ss, f); return ss; } });
 initTranslate({ queue, history, sessKey, curGen, renderLine, addMtCost, lat, mtHist, diag, showLat });
 // 旧版(单一节目,subs.html)的字幕记录复制到内置模板下。旧版页面和这里同源、共用存储,所以只复制不删除
 if (store.get("lines", null) && !store.get("lines.hoooope-2026", null)) store.set("lines.hoooope-2026", store.get("lines", null));
