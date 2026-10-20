@@ -63,3 +63,30 @@ The judge request sends only the lines since the last call, plus a summary of ea
 - **Test audio.** ffmpeg's `flite` filter provides four distinct English voices: `kal`, `awb`, `rms` and `slt`. A script concatenates a scripted multi-speaker conversation into a WAV. The same script records who speaks when, which serves as the reference labels.
 - **E2E.** Chromium's `--use-file-for-fake-audio-capture=<wav>` makes that WAV the microphone. The fake Realtime WebSocket emits transcripts with `audio_start_ms`/`audio_end_ms` taken from the script. The tests assert on labels.
 - **Evaluation.** `live-eval.ts` scores accuracy (correct labels among labelled lines), coverage (labelled lines among all lines) and churn (label changes after first shown).
+
+## Phase 2 decisions (from the feasibility measurements)
+Measured with real CAM++ on 4 flite voices. Full report from the engine agent: within one recording condition, same-speaker similarity is ≥ 0.81 and different-speaker similarity is ≤ 0.65. Clean voiceprints against room-degraded speech of the same voice drop to 0.54–0.81. Short 1.5 s clips still rank the right voice first against a centroid, at 0.55–0.84. In the worker, embedding takes about 0.1× real time: ~400 ms for a 4 s segment, ~150 ms for 1.5 s.
+
+**A and B form one pipeline.** Segments are clustered online (B). Each group's *centroid*, never a single segment, is matched against the template library (A). A library match names the group with `src: "library"`. The live pipeline's constants live in one exported `LIVE_SPK` object. Defaults:
+- cluster distance `0.38`, i.e. join if the cosine similarity to a group centroid is ≥ 0.62;
+- a group becomes visible at ≥ 3 s of speech or ≥ 2 segments;
+- segments shorter than 1.0 s are not clustered; they take the nearest visible group if its similarity is ≥ 0.55, otherwise no label;
+- library match per entry source: a `live` alt needs ≥ 0.80; a file `v` / `file` alt needs ≥ 0.70. Both need a margin of ≥ 0.08 over the second-best entry and a mutual best against the other groups' centroids. A group is matched only once it has ≥ 4 s of speech;
+- full recluster of all retained segment vectors (the last 400) every 30 s or every 10 new segments. New clusters map to old group ids by membership overlap (Hungarian), so letters and names stay stable. The recluster reports `merge` / `split` events.
+
+### `spk/live.ts` API (consumed by `spk/live-judge.ts` and the UI)
+```ts
+export interface LiveGroup { id: number; letter: string; name: string | null; src: NameSrc | null; cent: Float32Array; dur: number; n: number; visible: boolean }
+export interface LiveSpkApi {
+  groups(): LiveGroup[];                                  // visible groups only
+  linesSince(at: number): { id: number; text: string; g: number | null; aStart: number }[]; // live lines with aStart >= at
+  uncertain(): number;                                   // live lines with speech but no group label
+  events(): { kind: "new-group" | "merge" | "split" | "cue"; at: number }[]; // last hour, wall-clock ms
+  propose(p: { id: number; name: string; src: NameSrc }[]): { changed: boolean }; // goes through applyNames precedence
+}
+export function liveSpk(): LiveSpkApi | null;            // null while live speaker id is off / not running
+```
+`NameSrc`, `applyNames`, `canOverride` and `detectCue` live in `spk/live-schedule.ts`. `live.ts` calls `detectCue` on every new live line, and a hit adds a `cue` event.
+
+### `spk/live-judge.ts`
+This module owns the GPT loop for live sessions. It is started and stopped with live listening. It uses `nextJudgeDelay` and sends only the lines since the previous call, plus a summary of each group (letter, current name and source, seconds of speech) and the template people and speaker notes. The reply contains, for each group, a name and evidence (`intro`, `called` or `context`, mapped to `gpt-evidence` or `gpt-guess`) or no name. It calls `propose()` and records `{at, changed}` per call. It uses `cfg.ctModel`, `apiHeaders()` and `addMtCost()`, all injected.
