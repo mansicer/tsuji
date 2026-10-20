@@ -10,15 +10,18 @@ export const JUDGE_SCHED = {
   /** 冷启动间隔:上次调用有改动用短的,没改动用长的(即文档的 30–60 s) */
   coldFast: 30_000,
   coldSlow: 60_000,
-  /** 「回到快速」时的间隔(重新聚类合并/拆分、不确定句增多) */
+  /** 「回到快速」时的间隔(重新聚类合并/拆分、不确定句比例上升) */
   fast: 30_000,
   /** 退避:连续 1、2、≥3 次没改动时的间隔(1 → 2 → 5 分钟) */
   backoff: [60_000, 120_000, 300_000],
   /** 两次调用之间至少隔这么久,「立即」也要等够(防止新组、线索连发时刷屏) */
   minGap: 10_000,
-  /** 不确定句(没给说话人的句)比上次调用时多出这么多句,算「增多」 */
-  uncertainRise: 3,
-  /** 每小时最多调用次数 */
+  /** 不确定句(没给说话人的句)在本窗口新句里的比例,比上一窗口高出这么多,算「增多」。
+   *  看比例不看累计数:多人热闹对话里累计数几乎每次都涨,按累计数会一直停在快速档、顶到每小时上限 */
+  uncertainRise: 0.2,
+  /** 两个窗口都至少有这么多句才比比例(句太少比例没意义) */
+  uncertainMin: 5,
+  /** 每小时最多调用次数。实际节奏:冷启动 30–60 s 一次,之后退避到 5 分钟一次,一小时一般 15–40 次 */
   hourCap: 40,
   hour: 3_600_000,
 };
@@ -28,21 +31,28 @@ export interface SchedGroup { id: number; dur: number; name: string | null; src:
 export interface SchedEvent { kind: "new-group" | "merge" | "split" | "cue"; at: number }
 /** 一次判定调用:发起时间、结果是否改了什么(名字或来源) */
 export interface JudgeCall { at: number; changed: boolean }
+/** 一个窗口里的不确定句数 / 句数 */
+export interface UncWin { n: number; total: number }
 export interface JudgeStats {
   groups: SchedGroup[];
   /** 历次调用,按时间顺序;至少保留最近一小时(算上限)和最近几次(算退避) */
   calls: JudgeCall[];
   /** 上次调用之后新增的句数(没有调用过 = 全部句数) */
   linesSince: number;
-  /** 当前不确定句数,以及上次调用时的不确定句数 */
-  uncertain: number;
-  uncertainAtLast: number;
+  /** 上次调用之后的新句里不确定句的比例(只算已稳定的句,见 live-judge.ts),以及上一次调用发出去那批的比例 */
+  unc: UncWin;
+  uncLast: UncWin | null;
   events: SchedEvent[];
 }
 
 const RANK: Record<NameSrc, number> = { "gpt-guess": 0, "gpt-evidence": 1, library: 2, manual: 3 };
 /** GPT 还能改名字的组(manual、library 的组 GPT 改不了) */
 const open = (g: SchedGroup) => !g.src || RANK[g.src] < RANK.library;
+/** 不确定句比例比上一窗口明显上升(两个窗口都要有足够的句) */
+export function uncertainRose(cur: UncWin, prev: UncWin | null, C = JUDGE_SCHED): boolean {
+  if (!prev || cur.total < C.uncertainMin || prev.total < C.uncertainMin) return false;
+  return cur.n / cur.total - prev.n / prev.total >= C.uncertainRise - 1e-9;
+}
 
 /** 距现在多久之后调用判定(ms,0 = 立即);null = 不调用(没有新字幕,或没有 GPT 能改的组) */
 export function nextJudgeDelay(st: JudgeStats, now: number, C = JUDGE_SCHED): number | null {
@@ -53,7 +63,7 @@ export function nextJudgeDelay(st: JudgeStats, now: number, C = JUDGE_SCHED): nu
   const cold = st.groups.some((g) => open(g) && !g.name && g.dur >= C.coldDur);
   let at: number;
   if (since.some((e) => e.kind === "new-group" || e.kind === "cue")) at = last + C.minGap; // 立即
-  else if (since.length || st.uncertain - st.uncertainAtLast >= C.uncertainRise) at = last + C.fast; // 回到快速
+  else if (since.length || uncertainRose(st.unc, st.uncLast, C)) at = last + C.fast; // 回到快速
   else {
     if (!st.calls.length && !cold) return null; // 还没人说够 20 秒,先不叫
     // 连续没改动的次数,只数最近一次「重置」事件之后的调用

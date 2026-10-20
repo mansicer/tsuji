@@ -8,7 +8,7 @@ const grp = (id: number, dur: number, name: string | null = null, src: NameSrc |
 // 假的 LiveSpkApi:句子按时间自动生成(每 5 秒一句,轮流归 A/B),事件、不确定句可手动加
 function fakeApi(groups: JudgeApiGroup[]) {
   const st = {
-    groups, events: [] as SchedEvent[], uncertain: 0, talking: true, autoCue: false, extra: [] as JudgeApiLine[],
+    groups, events: [] as SchedEvent[], talking: true, autoCue: false, extra: [] as JudgeApiLine[],
     proposals: [] as { id: number; name: string; src: NameSrc }[][], frozenAt: Infinity,
   };
   const lines = (): JudgeApiLine[] => {
@@ -19,7 +19,6 @@ function fakeApi(groups: JudgeApiGroup[]) {
   const api: LiveJudgeApi = {
     groups: () => st.groups,
     linesSince: (at) => lines().filter((l) => l.aStart >= at),
-    uncertain: () => st.uncertain,
     events: () => (st.autoCue ? [...st.events, { kind: "cue", at: Date.now() }] : st.events),
     propose: (p) => { st.proposals.push(p); const r = applyNames(st.groups, p); st.groups = r.groups; return { changed: r.changed }; },
   };
@@ -169,7 +168,7 @@ describe("live judge loop", () => {
     warn.mockRestore();
   });
 
-  it("请求只带上次调用之后的句子", async () => {
+  it("请求只带上次调用之后的新句,外加最近几句旧句作上下文", async () => {
     const { api, st } = fakeApi([grp(0, 30), grp(1, 25)]);
     const f = fakeFetch(none);
     start(api, f);
@@ -178,9 +177,11 @@ describe("live judge loop", () => {
     await adv(20_000);
     st.events.push({ kind: "cue", at: Date.now() });
     await adv(1);
-    const u = user(f.bodies[1]);
-    expect(u).not.toMatch(/line 0\b/);
-    expect(u).toContain("[B] line 1\n[A] line 2\n[B] line 3\n[A] line 4");
+    const u = user(f.bodies[1]), nw = u.slice(u.indexOf("New lines:"));
+    expect(u).toContain("Earlier lines (context only, already judged):\n[A] line 0\n\nNew lines:");
+    expect(nw).not.toMatch(/line 0\b/);
+    expect(nw).toContain("[B] line 1\n[A] line 2\n[B] line 3\n[A] line 4");
+    expect(user(f.bodies[0])).not.toContain("Earlier lines");
     expect(u).toContain("- A: 30 s of speech, unnamed");
     expect(f.bodies[1]).toMatchObject({ model: "gpt-6.1-sol", reasoning_effort: LIVE_JUDGE.effort, response_format: { type: "json_schema" } });
   });
@@ -219,6 +220,123 @@ describe("live judge loop", () => {
     await adv(600_000);
     expect(f.fn).toHaveBeenCalledTimes(1);
     expect(st.proposals).toEqual([]);
+  });
+});
+
+// 句子手动给的假 API:测「[?] 发出去的句子有了组再补发」和「线索等组」
+function manualApi(groups: JudgeApiGroup[]) {
+  const st = { groups, events: [] as SchedEvent[], lines: [] as JudgeApiLine[] };
+  const api: LiveJudgeApi = {
+    groups: () => st.groups,
+    linesSince: (at) => st.lines.filter((l) => l.aStart >= at).map((l) => ({ ...l })),
+    events: () => st.events,
+    propose: (p) => { const r = applyNames(st.groups, p); st.groups = r.groups; return { changed: r.changed }; },
+  };
+  const add = (text: string, g: number | null, aStart: number) => { const l = { id: st.lines.length, text, g, aStart }; st.lines.push(l); return l; };
+  return { api, st, add, now: () => Date.now() - T0 };
+}
+const newLines = (b: any) => { const u = user(b); return u.slice(u.indexOf("New lines:")); };
+const ctxOf = (b: any) => { const u = user(b), i = u.indexOf("Earlier lines"); return i < 0 ? "" : u.slice(i, u.indexOf("New lines:")); };
+
+describe("自我介绍不丢", () => {
+  it("线索那句一直没有组:等满 cueWait 以 [?] 发出;之后有了组再作为新句补发一次", async () => {
+    const { api, st, add, now } = manualApi([grp(0, 30)]);
+    const f = fakeFetch(none);
+    add("Welcome to the show.", 0, 0);
+    start(api, f);
+    await adv(0);
+    expect(f.at).toEqual([0]);
+    await adv(5_000);
+    const hi = add("Hi, I'm Alice.", null, 5_000); st.events.push({ kind: "cue", at: Date.now() });
+    await adv(5_000); // minGap 到了,但线索那句还没组 → 等
+    expect(f.at).toEqual([0]);
+    await adv(9_999);
+    expect(f.at).toEqual([0]);
+    await adv(1); // 线索之后 15 秒:不再等
+    expect(f.at).toEqual([0, 5_000 + LIVE_JUDGE.cueWait]);
+    expect(newLines(f.bodies[1])).toContain("[?] Hi, I'm Alice.");
+    expect(ctxOf(f.bodies[1])).toContain("[A] Welcome to the show.");
+    // 还是没组:不算新字幕,不叫
+    await adv(60_000);
+    expect(f.at.length).toBe(2);
+    // 新组出现,那句归了 B → 作为新句补发
+    st.groups = [grp(0, 40), grp(1, 4)]; hi.g = 1; st.events.push({ kind: "new-group", at: Date.now() });
+    await adv(LIVE_JUDGE.poll);
+    expect(f.at.length).toBe(3);
+    expect(newLines(f.bodies[2])).toContain("[B] Hi, I'm Alice.");
+    expect(newLines(f.bodies[2])).not.toContain("Welcome");
+    // 补发过一次就不再发
+    st.events.push({ kind: "merge", at: Date.now() }); add("So, Alice, how are you?", 0, 20_000);
+    await adv(C.fast + LIVE_JUDGE.poll);
+    expect(f.at.length).toBe(4);
+    expect(newLines(f.bodies[3])).not.toContain("Hi, I'm Alice");
+    expect(ctxOf(f.bodies[3])).toContain("[B] Hi, I'm Alice.");
+    expect(now()).toBeGreaterThan(0);
+  });
+
+  it("线索触发的调用等线索那句有了组再发", async () => {
+    const { api, st, add } = manualApi([grp(0, 30)]);
+    const f = fakeFetch(none);
+    add("Welcome to the show.", 0, 0);
+    start(api, f);
+    await adv(5_000);
+    const hi = add("Hi, I'm Alice.", null, 5_000); st.events.push({ kind: "cue", at: Date.now() });
+    await adv(7_000);
+    expect(f.at).toEqual([0]); // minGap 已过(10 s),但还没组
+    hi.g = 0;
+    await adv(LIVE_JUDGE.poll);
+    expect(f.at.length).toBe(2);
+    expect(f.at[1]).toBeGreaterThan(12_000); expect(f.at[1]).toBeLessThanOrEqual(12_000 + LIVE_JUDGE.poll); // 有组之后一个轮询周期内
+    expect(newLines(f.bodies[1])).toContain("[A] Hi, I'm Alice.");
+    expect(user(f.bodies[1])).not.toContain("[?]");
+  });
+
+  it("[?] 句超过 pendWin(音频时钟)才有组:不再补发", async () => {
+    const { api, st, add } = manualApi([grp(0, 30)]);
+    const f = fakeFetch(none);
+    add("Welcome to the show.", 0, 0);
+    const q = add("Mm-hmm.", null, 2_000);
+    start(api, f);
+    await adv(0);
+    expect(newLines(f.bodies[0])).toContain("[?] Mm-hmm.");
+    await adv(1_000);
+    add("Later line.", 0, 2_000 + LIVE_JUDGE.pendWin); q.g = 0; st.events.push({ kind: "cue", at: Date.now() });
+    await adv(C.minGap);
+    expect(f.at.length).toBe(2);
+    expect(newLines(f.bodies[1])).toContain("[A] Later line.");
+    expect(newLines(f.bodies[1])).not.toContain("Mm-hmm");
+  });
+
+  it("上下文最多 ctxLines 句", async () => {
+    const { api, st, add } = manualApi([grp(0, 30)]);
+    const f = fakeFetch(none);
+    for (let i = 0; i < 12; i++) add(`old ${i}`, 0, i * 1000);
+    start(api, f);
+    await adv(1_000);
+    add("new one", 0, 20_000); st.events.push({ kind: "cue", at: Date.now() });
+    await adv(C.minGap);
+    const ctx = ctxOf(f.bodies[1]);
+    expect(ctx.match(/^\[A\] old/gm)!.length).toBe(LIVE_JUDGE.ctxLines);
+    expect(ctx).toContain("[A] old 11");
+    expect(ctx).not.toContain("old 6\n");
+  });
+  it("热闹对话里不确定句一直有(比例不变)仍会退避;比例突然升高才回到快速", async () => {
+    const { api, st, add, now } = manualApi([grp(0, 30, "Alice", "gpt-evidence"), grp(1, 30, "Bob", "gpt-guess")]);
+    const f = fakeFetch(none);
+    let i = 0, bad = 5; // 每 bad 句里有一句没组
+    const talk = async (ms: number) => { for (const end = now() + ms; now() < end;) { add(`l${i}`, i % bad === 0 ? null : i % 2, now()); i++; await adv(5_000); } };
+    st.events.push({ kind: "cue", at: T0 });
+    start(api, f);
+    await talk(1_200_000);
+    const gaps = f.at.slice(1).map((t, k) => t - f.at[k]);
+    expect(gaps.slice(-2)).toEqual([300_000, 300_000]);
+    expect(f.at.length).toBeLessThan(10);
+    // 一半句子没组:比例从 0.2 升到 0.5 → 30 秒节奏
+    const n0 = f.at.length, t0 = f.at[n0 - 1];
+    bad = 2;
+    await talk(300_000);
+    expect(f.at.length).toBeGreaterThan(n0);
+    expect(f.at[n0] - t0).toBeLessThan(300_000); // 本窗口比例升上去就叫,不等满 5 分钟
   });
 });
 

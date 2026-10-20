@@ -62,10 +62,12 @@ Lines are shown with a coloured chip: the name if named, otherwise the letter. A
 `live-schedule.ts` exports `nextJudgeDelay(stats) → ms | null` (`null` means don't call). Its rules:
 - **Cold start.** While some group has at least 20 s of speech and no name: call every 30–60 s. Call immediately when a new group appears or when a self-introduction or name-calling cue is detected locally.
 - **Back-off.** When consecutive judgments change nothing, the delay grows 1 min → 2 min → 5 min.
-- **Reset to fast** on any of these: a new group, a merge or split after reclustering, or a rise in uncertain lines.
-- **Skip** when there is no new text since the last call. A per-hour call cap applies.
+- **Reset to fast** on any of these: a new group, a merge or split after reclustering, or a rise in the *share* of uncertain (unlabelled) lines among the new lines since the last call, compared with the previous call's window (`uncertainRose`: +0.2 or more, both windows ≥ 5 lines). A running count is not used: in lively talk it rises on almost every call.
+- **Skip** when there is no new text since the last call, or when every group is locked (named by the user or the library). A per-hour call cap of 40 applies.
 
-The judge request sends only the lines since the last call, plus a summary of each group. It reuses `spk/judge.ts` prompts where possible.
+In practice that is about 15–40 calls an hour, roughly $0.05–0.20 per hour with the default model. The `lspk.onHint` and `spk.confirm` texts tell the user so.
+
+The judge request sends the lines since the last call, plus a summary of each group and the last 5 already-sent lines marked as context. A line sent as `[?]` (no group yet) is sent again once it gets a group, if it is still within 60 s of audio clock. A cue-triggered call waits until the cue line has a group, at most 15 s. It reuses `spk/judge.ts` prompts where possible.
 
 ### Live recording (C, `live-record.ts`)
 - **Session fields (`state.ts`).** `Session.rec?: RecInfo`, where `RecInfo = { on: boolean; bytes: number; parts: RecPart[] }` and `RecPart = { t0: number; t1: number; at?: number; mime: string; bytes: number }`.
@@ -128,4 +130,4 @@ Notes on the implementation (`spk/live.ts`, pure parts in `spk/live-core.ts`):
 `NameSrc`, `applyNames`, `canOverride` and `detectCue` live in `spk/live-schedule.ts`. `live.ts` calls `detectCue` on every new live line, and a hit adds a `cue` event.
 
 ### `spk/live-judge.ts`
-This module owns the GPT loop for live sessions. It is started and stopped with live listening. It uses `nextJudgeDelay` and sends only the lines since the previous call, plus a summary of each group (letter, current name and source, seconds of speech) and the template people and speaker notes. The reply contains, for each group, a name and evidence (`intro`, `called` or `context`, mapped to `gpt-evidence` or `gpt-guess`) or no name. It calls `propose()` and records `{at, changed}` per call. It uses `cfg.ctModel`, `apiHeaders()` and `addMtCost()`, all injected.
+This module owns the GPT loop for live sessions. It is started and stopped with live listening. It uses `nextJudgeDelay` and sends the lines since the previous call (with the context and resend rules above), plus a summary of each group (letter, current name and source, seconds of speech) and the template people and speaker notes. The reply contains, for each group, a name and evidence (`intro`, `called` or `context`, mapped to `gpt-evidence` or `gpt-guess`) or no name. It calls `propose()` and records `{at, changed}` per call. It uses `cfg.ctModel`, `apiHeaders()` and `addMtCost()`, all injected.

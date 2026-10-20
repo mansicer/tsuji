@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applyNames, canOverride, detectCue, JUDGE_SCHED as C, nextJudgeDelay, type JudgeStats, type NameSrc, type SchedGroup } from "../src/spk/live-schedule";
+import { applyNames, canOverride, detectCue, JUDGE_SCHED as C, nextJudgeDelay, uncertainRose, type JudgeStats, type NameSrc, type SchedGroup } from "../src/spk/live-schedule";
 
 const g = (id: number, dur: number, name: string | null = null, src: NameSrc | null = null): SchedGroup => ({ id, dur, name, src });
-const st = (o: Partial<JudgeStats> = {}): JudgeStats => ({ groups: [g(0, 25)], calls: [], linesSince: 5, uncertain: 0, uncertainAtLast: 0, events: [], ...o });
+const st = (o: Partial<JudgeStats> = {}): JudgeStats => ({ groups: [g(0, 25)], calls: [], linesSince: 5, unc: { n: 0, total: 0 }, uncLast: null, events: [], ...o });
 const named = [g(0, 60, "Alice", "gpt-evidence"), g(1, 40, "Bob", "gpt-guess")];
 
 describe("nextJudgeDelay", () => {
@@ -40,13 +40,29 @@ describe("nextJudgeDelay", () => {
     expect(d(false, false, false, false, false, false)).toBe(300_000);
     expect(d(false, false, false, true)).toBe(60_000);
   });
-  it("合并/拆分、不确定句增多:回到快速(30 秒)", () => {
+  it("合并/拆分、不确定句比例上升:回到快速(30 秒)", () => {
     const calls = [0, 1, 2, 3].map((i) => ({ at: i * 1000, changed: false }));
     expect(nextJudgeDelay(st({ groups: named, calls }), 3000)).toBe(300_000);
     expect(nextJudgeDelay(st({ groups: named, calls, events: [{ kind: "merge", at: 3500 }] }), 4000)).toBe(C.fast - 1000);
     expect(nextJudgeDelay(st({ groups: named, calls, events: [{ kind: "split", at: 3500 }] }), 4000)).toBe(C.fast - 1000);
-    expect(nextJudgeDelay(st({ groups: named, calls, uncertain: 10, uncertainAtLast: 7 }), 4000)).toBe(C.fast - 1000);
-    expect(nextJudgeDelay(st({ groups: named, calls, uncertain: 9, uncertainAtLast: 7 }), 4000)).toBe(300_000 - 1000);
+    // 上一窗口 1/10 不确定,这次 4/10:比例升了 0.3 → 快速
+    expect(nextJudgeDelay(st({ groups: named, calls, unc: { n: 4, total: 10 }, uncLast: { n: 1, total: 10 } }), 4000)).toBe(C.fast - 1000);
+    // 只升了 0.1:照常退避
+    expect(nextJudgeDelay(st({ groups: named, calls, unc: { n: 2, total: 10 }, uncLast: { n: 1, total: 10 } }), 4000)).toBe(300_000 - 1000);
+  });
+  it("热闹的多人对话:不确定句累计数每次都涨,但比例不变 → 仍然退避", () => {
+    // 每个窗口 30 句里 6 句不确定(累计数每次 +6,旧规则会一直回到快速)
+    const calls = [0, 1, 2, 3].map((i) => ({ at: i * 1000, changed: false }));
+    expect(nextJudgeDelay(st({ groups: named, calls, unc: { n: 6, total: 30 }, uncLast: { n: 6, total: 30 } }), 4000)).toBe(300_000 - 1000);
+    expect(nextJudgeDelay(st({ groups: named, calls, unc: { n: 9, total: 30 }, uncLast: { n: 5, total: 25 } }), 4000)).toBe(300_000 - 1000);
+  });
+  it("uncertainRose:比例上升够多、两个窗口句数都够才算", () => {
+    expect(uncertainRose({ n: 3, total: 10 }, { n: 1, total: 10 })).toBe(true); // +0.2
+    expect(uncertainRose({ n: 2, total: 10 }, { n: 1, total: 10 })).toBe(false);
+    expect(uncertainRose({ n: 4, total: 4 }, { n: 0, total: 10 })).toBe(false); // 这次句太少
+    expect(uncertainRose({ n: 5, total: 10 }, { n: 0, total: 3 })).toBe(false); // 上次句太少
+    expect(uncertainRose({ n: 5, total: 10 }, null)).toBe(false);
+    expect(uncertainRose({ n: 2, total: 10 }, { n: 1, total: 10 }, { ...C, uncertainRise: 0.1 })).toBe(true);
   });
   it("重置之后,退避从头数(重置之前的没改动不算)", () => {
     const calls = [{ at: 0, changed: false }, { at: 1000, changed: false }, { at: 2000, changed: false }, { at: 5000, changed: false }];
