@@ -21,6 +21,7 @@ import { creator, openCreator, renderCreator, initCreator } from "./creator";
 import { liveAudio, lineAudio } from "./live-audio";
 import { initRecord, recBegin, recEnd, recUi } from "./live-record";
 import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
+import * as spkEngine from "./spk/engine";
 
 // ---------- 小工具 ----------
 // 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
@@ -1001,4 +1002,4 @@ window.addEventListener("beforeunload", (e) => { if (state.running) { e.preventD
 window.addEventListener("pagehide", flushLines);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushLines(); });
 // 给端到端测试用的观察口(模块作用域里的状态外面看不到)
-Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, liveAudio, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
+Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, liveAudio, spkEngine, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });

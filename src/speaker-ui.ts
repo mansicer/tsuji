@@ -2,13 +2,12 @@
 // 能量检测在 0.25 秒的停顿处细切 → 每段算 CAM++ 声纹(onnxruntime-web)→ 1.5 秒以上的片段做层次聚类分组 → 每段归到最近的组
 // → 每句字幕按重叠时长投票,最多的一组占比达到阈值才标名字。实测(3 人快速接话的电台节目):片段 93%,按句约 75%,约一半的句子有标签
 // 声纹存在 IndexedDB「spk:<会话 id>」,改阈值、改名字只重新分组/投票,不用重算
-import * as ort from "onnxruntime-web/wasm";
-import { SPK_MODEL } from "./config";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import type { Basis, JudgeLine } from "./spk/judge";
-import { SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
+import { SPK_DIM, spkResample, spkSegments, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
+import { loadModel, embed, matchAll, f32b64, b64f32 } from "./spk/engine";
 import { t, CJK } from "./i18n";
-import { fetchProgress, extractPcm } from "./media";
+import { extractPcm } from "./media";
 import type { ExtractCallbacks } from "./media";
 import { fmtClock } from "./subtitle";
 import { store, idb } from "./storage";
@@ -39,7 +38,7 @@ export interface SpeakerDeps {
 let D: SpeakerDeps;
 
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e64980", "#5c7cfa"];
-let spkBusy = false, spkModelP: Promise<ort.InferenceSession> | null = null;
+let spkBusy = false;
 // 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
 const SPK_SHARE = 0.85;
 // 分组阈值(余弦距离)、投票时句子两端放宽的秒数、没有重叠片段时找最近片段的最大距离:
@@ -55,19 +54,6 @@ export function paintSpk(l: Line): void {
   if (!w) tm.append(w = el("span", { className: "who" }));
   w.textContent = l.spk || t("spk.unsure"); w.classList.toggle("unsure", !l.spk); w.style.setProperty("--c", l.spk ? SPK_COLORS[(l.spc || 0) % SPK_COLORS.length] : "");
   w.classList.toggle("ai", !!l.spkBy); w.title = l.spkBy ? t("spk.by." + l.spkBy) : "";
-}
-// onnxruntime-web 的 wasm(14 MB)和声纹模型都随页面同源发布;模型 28 MB,边下边显示进度
-function loadSpkModel(onPct: (p: number) => void): Promise<ort.InferenceSession> {
-  return (spkModelP ||= (async () => {
-    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
-    const buf = await fetchProgress(SPK_MODEL, onPct, 28281138);
-    return ort.InferenceSession.create(buf, { executionProviders: ["wasm"] });
-  })().catch((e) => { spkModelP = null; throw e; }));
-}
-async function spkEmbed(model: ort.InferenceSession, x: Float32Array): Promise<Float32Array> {
-  const { data, T } = spkFbank(x);
-  const r = await model.run({ [model.inputNames[0]]: new ort.Tensor("float32", data, [1, T, 80]) });
-  return spkNorm(r[model.outputNames[0]].data as Float32Array);
 }
 async function spkLoad() {
   if (!state.curSess) return null;
@@ -87,7 +73,7 @@ async function spkAnalyze() {
   spkBusy = true; renderSpk(); spkBar(0);
   try {
     spkMsg(t("spk.loadModel", { pct: 0 }));
-    const model = await loadSpkModel((p) => { spkBar(p); spkMsg(t("spk.loadModel", { pct: Math.round(p * 100) })); });
+    await loadModel((p) => { spkBar(p); spkMsg(t("spk.loadModel", { pct: Math.round(p * 100) })); });
     if (!D.fileJob.pcm) {
       spkBar(null); spkMsg(t("spk.extract"));
       const keep = D.fileJob.phase;
@@ -95,11 +81,11 @@ async function spkAnalyze() {
     }
     if (state.curSess !== ss) return;
     const pcm = D.fileJob.pcm, segs = spkSegments(pcm, 24000), n = segs.length, emb = new Float32Array(n * SPK_DIM);
-    // 模型在主线程里跑,await 不会真的把控制权还给浏览器:每 40 ms 主动让一次,页面才能响应、进度条才会刷新
+    // 声纹在 Worker 里算(spk/engine.ts);退回主线程时 await 不会真的把控制权还给浏览器:每 40 ms 主动让一次,页面才能响应、进度条才会刷新
     let yieldAt = performance.now();
     for (let i = 0; i < n; i++) {
       if (state.curSess !== ss) return;
-      emb.set(await spkEmbed(model, spkResample(pcm, Math.round(segs[i][0] * 24000), Math.round(segs[i][1] * 24000))), i * SPK_DIM);
+      emb.set(await embed(spkResample(pcm, Math.round(segs[i][0] * 24000), Math.round(segs[i][1] * 24000))), i * SPK_DIM);
       if (performance.now() - yieldAt > 40) { spkBar(i / n); spkMsg(t("spk.embed", { i, n })); await new Promise((r) => setTimeout(r, 0)); yieldAt = performance.now(); }
     }
     const old = state.spk && state.spk.sid === ss.id ? state.spk : null;
@@ -187,9 +173,7 @@ function spkVote() {
   spk.tagged = tagged; spk.timed = timed;
   D.saveLines();
 }
-// 模板声纹库:{ 名字: { v: base64(192 维 float32), d: 累计秒数 } }。确认过组名后存进模板,之后同一模板的文件自动对照
-const f32b64 = (v: ArrayLike<number>) => btoa(String.fromCharCode(...new Uint8Array(Float32Array.from(v).buffer)));
-const b64f32 = (s: string) => new Float32Array(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer);
+// 模板声纹库:{ 名字: { v: base64(192 维 float32), d: 累计秒数, alts? } }。确认过组名后存进模板,之后同一模板的文件自动对照
 function spkGroupVecs() { return state.spk!.groups!.map((_, k) => state.spk!.cents!.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)); } // 各组质心
 function spkSaveVoices() {
   const tp = D.getTemplate(cfg.tpl.id); if (!tp || !state.spk) return;
@@ -203,23 +187,16 @@ function spkSaveVoices() {
   for (const [nm, a] of Object.entries(acc)) { // 和库里同名的按时长加权合并
     const old = lib[nm];
     if (old) { const ov = b64f32(old.v); for (let i = 0; i < SPK_DIM; i++) a.v[i] += ov[i] * old.d; a.d += old.d; }
-    lib[nm] = { v: f32b64(spkNorm(a.v)), d: Math.round(a.d) };
+    lib[nm] = { ...old, v: f32b64(spkNorm(a.v)), d: Math.round(a.d) }; // 文件会话只更新 v,现场收音存的 alts 保留
   }
   D.putTemplate({ ...tp, voices: lib }); renderSpk(); spkMsg(t("spk.saved", { names: Object.keys(acc).join("、") || "—" }));
 }
-// 对照规则(MyGO 四集跨集实测):余弦 ≥ 0.88、比第二像的高 0.05 以上、且互为最像 —— 不同人的误认全部排除;
+// 对照规则见 spk/engine.ts 的 match(余弦 ≥ 0.88、比第二像的高 0.05 以上、互为最像;v 和 alts 取最像的);
 // 同一声优的「本人声线」和「角色声线」可能互相匹配,所以只作为提示交给 GPT,由它按本集是角色回还是本人回定名字
-const SPK_LIB_MIN = 0.88, SPK_LIB_MARGIN = 0.05;
 function spkLibMatch(): ({ name: string; sim: number } | null)[] {
-  const lib = Object.entries((cfg.tpl && cfg.tpl.voices) || {}).map(([name, x]) => ({ name, v: b64f32(x.v) }));
-  if (!state.spk || !lib.length) return [];
-  const G = spkGroupVecs();
-  return G.map((c, k) => {
-    const sc = lib.map((x) => spkDot(c, x.v)).map((s2, i) => [s2, i]).sort((a, b) => b[0] - a[0]);
-    const [s1, i1] = sc[0], s2 = sc[1] ? sc[1][0] : -1;
-    const mutual = G.every((h, j) => j === k || spkDot(h, lib[i1].v) < s1);
-    return s1 >= SPK_LIB_MIN && s1 - s2 >= SPK_LIB_MARGIN && mutual ? { name: lib[i1].name, sim: s1 } : null;
-  });
+  const voices = (cfg.tpl && cfg.tpl.voices) || {};
+  if (!state.spk || !Object.keys(voices).length) return [];
+  return matchAll(spkGroupVecs(), voices).map((m) => m && { name: m.name, sim: m.sim });
 }
 // LLM 判定:声纹候选 + 字幕文本 + 模板(背景、说话人线索、出演者)→ 每组的名字、每句的说话人
 let spkJudging = false;

@@ -7,8 +7,9 @@ import type { Basis } from "./spk/judge";
 import { LineStore } from "./linestore";
 import { noKV, storageFailed } from "./storage";
 
-/** 声纹库里的一个人:v = base64(192 维 float32),d = 累计秒数 */
-export interface Voice { v: string; d: number }
+/** 声纹库里的一个人:v = base64(192 维 float32),d = 累计秒数;alts = 同一个人的其他声纹(例如现场收音),对照时取最像的一个 */
+export interface Voice { v: string; d: number; alts?: VoiceAlt[] }
+export interface VoiceAlt { v: string; d: number; src: "file" | "live" }
 
 /** 模板(内置模板带 builtin / modified 标记) */
 export interface Template {
