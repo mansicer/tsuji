@@ -45,7 +45,7 @@ export async function extractPcm(blob: Blob, cb: ExtractCallbacks): Promise<Int1
 }
 // 一段里有几句就拆开,时间按字数比例分;只有标点的句子丢掉(它占的时间也不分给别的句子)
 export function splitTimed(text: string, s: number, e: number, cjkSource: boolean): { text: string; s: number; e: number }[] {
-  const re = cjkSource ? /[^。！？]+[。！？]+[」』）)]*|[^。！？]+$/g : /[^.!?]+(?:[.!?]+["')\]]*(?=\s|$))|[^.!?]+$/g;
+  const re = cjkSource ? /[^。！？]+[。！？]+[」』）)]*|[^。！？]+$/g : /\S[\s\S]*?(?:[.!?]+["')\]]*(?=\s|$)|$)/g;
   const parts = (text.match(re) || [text]).map((x) => x.trim()).filter(Boolean);
   const total = parts.reduce((a, x) => a + x.length, 0) || 1; let at = s;
   const out: { text: string; s: number; e: number }[] = [];
