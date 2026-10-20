@@ -435,3 +435,16 @@ body.filemode #go::before { width: 14px; height: 14px; }
 #recConfirm .btns .btn { font-size: inherit; gap: 6px; padding: 0 14px; } /* 不套用卡片按钮在手机上只留图标的规则 */
 #recBar { margin-top: 0; }
 body.filemode #recBtn, body.filemode #recBar, body.filemode #recConfirm { display: none; }
+/* 实时说话人(spk/live.ts):字幕左上角的组标签(点一下起名)、起名的小菜单、存声纹 */
+.row:has(.lwho) { display: flow-root; }
+.row .who.lwho { float: left; margin: 4px 8px 0 0; border: 0; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.row .who.lwho.ai { border: 1px dashed var(--c); }
+#lspkPick { position: fixed; z-index: 20; display: grid; gap: 8px; width: min(320px, calc(100vw - 16px)); margin: 0; padding: 12px; border-top: 3px solid var(--c); box-shadow: var(--shadow-hi); }
+#lspkPick .btns { flex-wrap: wrap; gap: 6px; }
+#lspkPick .btn { min-height: 30px; padding: 4px 10px; font-size: 13px; }
+#lspkPick .other input { flex: 1; min-width: 0; min-height: 32px; padding: 4px 8px; }
+#lspkPick .other:has(input[hidden]) { display: none; }
+#lspkBar { margin-top: 0; }
+#lspkSaveBox { margin: 0; display: grid; gap: 8px; }
+#lspkSaveBox .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); margin-right: 4px; }
+body.filemode #lspkBar, body.filemode #lspkSaveBox, body.nospk #lspkBar, body.nospk #lspkSaveBox { display: none; }

@@ -89,7 +89,7 @@ function deleteSession(id: string): void {
   d.bumpGen(id);
   state.sessions = state.sessions.filter((x) => x.id !== id);
   for (const x of state.sessions) if (x.recSession === id) delete x.recSession; // 录音转出的文件会话删了:实时会话可以再转
-  saveSessions(); state.lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {}); idb.delPrefix(recPrefix(id)).catch(() => {});
+  saveSessions(); state.lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {}); idb.del("lspk:" + id).catch(() => {}); idb.delPrefix(recPrefix(id)).catch(() => {});
   if (state.curSess && state.curSess.id === id) useSession(state.sessions.length ? [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
 }
 // 旧版数据(字幕按模板存、设置全局存)升级成会话:每个有字幕的模板一个会话,当前设置带进去。只复制,不删旧数据

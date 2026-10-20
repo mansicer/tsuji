@@ -2,6 +2,7 @@
 // 启动时全部读进内存,读取保持同步(切换会话、导出时不用等)。写入失败交给 onError 提示用户。
 
 import type { Basis } from "./spk/judge";
+import type { NameSrc } from "./spk/live-schedule";
 
 /** 存储里的一行字幕(字段见 main.ts 的 saveLines) */
 export interface SavedLine {
@@ -12,6 +13,8 @@ export interface SavedLine {
   as?: number; ae?: number;
   /** 说话人:名字、颜色序号、GPT 判定依据 */
   k?: string; kc?: number; kb?: Basis;
+  /** 实时说话人(Line.lspk):组号、名字、名字来源、余弦 */
+  lg?: number | null; ln?: string | null; ls?: NameSrc | null; lc?: number;
   /** 很早的版本把原文 / 译文存成 ja / zh */
   ja?: string; zh?: string;
   [k: string]: unknown;

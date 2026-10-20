@@ -120,6 +120,11 @@ export interface LiveSpkApi {
 }
 export function liveSpk(): LiveSpkApi | null;            // null while live speaker id is off / not running
 ```
+Notes on the implementation (`spk/live.ts`, pure parts in `spk/live-core.ts`):
+- `liveSpk()` is non-null only while listening with speaker identification on. `linesSince` and `uncertain` cover the lines of the current listening run (the audio clock restarts with each run). A group's `letter` follows from its id (0 → A).
+- Group ids are assigned when a group becomes visible, so letters have no gaps. Before that a group is internal and its lines have `g: null`.
+- Saving a live voice for a person who is not in the library yet creates `{ v: <live centroid>, d: 0, alts: [{ src: "live", … }] }`. `d: 0` marks `v` as a placeholder: live matching ignores it, and the next file-session save overwrites it (it merges with weight `d`).
+
 `NameSrc`, `applyNames`, `canOverride` and `detectCue` live in `spk/live-schedule.ts`. `live.ts` calls `detectCue` on every new live line, and a hit adds a `cue` event.
 
 ### `spk/live-judge.ts`

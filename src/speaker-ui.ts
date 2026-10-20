@@ -34,10 +34,12 @@ export interface SpeakerDeps {
   apiHeaders(): Record<string, string>;
   addMtCost(model: string, usage: unknown): void;
   openSettings(): void;
+  /** 开关说话人识别时通知(实时会话的流水线) */
+  onToggle?(on: boolean): void;
 }
 let D: SpeakerDeps;
 
-const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e64980", "#5c7cfa"];
+export const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e64980", "#5c7cfa"];
 let spkBusy = false;
 // 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
 const SPK_SHARE = 0.85;
@@ -286,6 +288,7 @@ function spkSetOn(on: boolean) {
   $("#spkOn").checked = on;
   D.sset("spkOn", on ? "1" : null); document.body.classList.toggle("nospk", !spkOn());
   for (const l of lines) paintSpk(l);
+  if (D.onToggle) D.onToggle(on);
   if (!$("#spkPanel").hidden) renderSpk();
   spkAuto();
 }

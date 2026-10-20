@@ -4,6 +4,7 @@
 // cfg 和 lines 只改内容、不重新赋值,几乎每个功能都用,也从这里导出。
 import type { Glossary } from "./glossary";
 import type { Basis } from "./spk/judge";
+import type { NameSrc } from "./spk/live-schedule";
 import { LineStore } from "./linestore";
 import { noKV, storageFailed } from "./storage";
 
@@ -52,7 +53,10 @@ export interface Line {
   aStart?: number; aEnd?: number;
   /** 说话人:spk 名字("" = 不确定),spc 颜色序号,spkBy GPT 判定依据,spkV 声纹候选 [组号, 占比],spkNear 最近片段的距离(秒) */
   spk?: string; spc?: number; spkBy?: Basis; spkV?: [number, number][]; spkNear?: number;
+  /** 实时说话人(spk/live.ts):g = 组号(null = 不确定),name / src = 组名和来源,conf = 和组质心的余弦 */
+  lspk?: LiveLabel;
 }
+export interface LiveLabel { g: number | null; name: string | null; src: NameSrc | null; conf: number }
 
 /** 当前生效的设置(applySettings / refreshTemplate 填充;启动时先填好再用) */
 export interface Cfg {

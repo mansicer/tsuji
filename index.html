@@ -65,6 +65,9 @@
       <div class="hint i-alert" data-i18n="lrec.confirm"></div>
       <div class="btns"><button class="btn primary i-rec" id="recOk" data-i18n="lrec.ok"></button><button class="btn" id="recNo" data-i18n="lrec.no"></button></div>
     </div>
+    <!-- 实时说话人(spk/live.ts):模型加载进度;停止后把起好名字的声音存进模板 -->
+    <div class="pinfo" id="lspkBar" hidden><span id="lspkInfo"></span><span class="btns"><button class="btn i-download" id="lspkSave" data-i18n="lspk.save" hidden></button></span></div>
+    <div class="card" id="lspkSaveBox" hidden></div>
     <div class="pinfo" id="recBar" hidden><span id="recInfo"></span><span class="btns"><button class="btn i-film" id="recConvert" data-i18n="lrec.convert"></button></span></div>
     <div class="controls">
       <span class="ctlSide"></span>
@@ -221,7 +224,8 @@
       <div class="hint" data-i18n="spk.confirm"></div>
       <div class="btns"><button class="btn primary" id="spkConfirmOk" data-i18n="spk.confirmOk"></button><button class="btn" id="spkConfirmNo" data-i18n="spk.confirmNo"></button></div>
     </div>
-    <div class="hint" data-i18n="spk.onHint"></div>
+    <div class="hint" id="spkHint" data-i18n="spk.onHint"></div>
+    <div class="hint" id="lspkHint" data-i18n="lspk.onHint" hidden></div>
   </section>
 
   <section class="sess">
