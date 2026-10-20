@@ -1,4 +1,3 @@
-// @ts-nocheck —— 从单文件页面整体搬过来的主程序,之后按功能逐步拆模块、补类型
 import "./style.css";
 import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD } from "./config";
 import { parseGlossary } from "./glossary";
@@ -11,7 +10,10 @@ import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "
 import { extractPcm, splitTimed } from "./media";
 import { asrPrompt, keywords, glossaryForLLM } from "./prompts";
 import { asrCost, mtCost } from "./cost";
-import { state, cfg, lines } from "./state";
+import { state, cfg, lines, type Line, type Session, type Template, type View } from "./state";
+import type { KV } from "./linestore";
+import type { Usage } from "./cost";
+import type { ExtractCallbacks } from "./media";
 import { $, el, flash, flashBtn, download } from "./dom";
 import { initSessions, saveSessions, sget, sset, sessTemplate, newSession, useSession, refreshTemplate, migrateToSessions, fileName, renderSessions } from "./sessions";
 import { initTranslate, pumpTranslate, apiHeaders, loadMemo, setMemo } from "./translate";
@@ -25,17 +27,17 @@ setStorageWarn((kind) => flash(t(kind === "full" ? "flash.storage" : "flash.stor
 function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value) + (getUiLang() === "zh" ? "" : " ") + t("set.ctModelHint"); }
 
 // 滑动条刻度:每项列出带数字的主刻度,默认值高亮;点刻度直接跳到该值
-const TICKS = {
+const TICKS: Record<string, number[]> = {
   maxGain: [1, 10, 20, 30, 40, 50], agcTarget: [2, 8, 14, 20, 25], vad: [0.05, 0.2, 0.4, 0.6, 0.9],
   silence: [200, 600, 1000, 1500, 2000], maxTurn: [3, 8, 15, 20, 25, 30], prefix: [0, 300, 500, 750, 1000], tgtSize: [16, 24, 32, 40],
 };
-const TICK_DEF = { tgtSize: 24 }; // 不在收音设置里的滑动条的默认值
+const TICK_DEF: Record<string, number> = { tgtSize: 24 }; // 不在收音设置里的滑动条的默认值
 function buildTicks() {
   for (const [id, marks] of Object.entries(TICKS)) {
     const r = $("#" + id), min = Number(r.min), max = Number(r.max), def = TICK_DEF[id] ?? AUDIO_DEFAULTS[id];
     const box = el("div", { className: "ticks", ariaHidden: "true" }, ...marks.map((v) => el("span", {
       className: v === def ? "def" : "", textContent: String(v), style: `left:${((v - min) / (max - min)) * 100}%`,
-      onclick: (e) => { e.preventDefault(); r.value = v; r.dispatchEvent(new Event("input", { bubbles: true })); },
+      onclick: (e: Event) => { e.preventDefault(); r.value = v; r.dispatchEvent(new Event("input", { bubbles: true })); },
     })));
     r.after(box);
     // 数值标放进标签第一行(名称右侧)
@@ -44,10 +46,10 @@ function buildTicks() {
   }
 }
 // 每个滑动条标签右侧显示当前值(带单位),和填充色一起刷新
-const RANGE_UNIT = { maxGain: "u.x", silence: "u.ms", prefix: "u.ms", maxTurn: "u.s", tgtSize: "u.px" };
+const RANGE_UNIT: Record<string, string> = { maxGain: "u.x", silence: "u.ms", prefix: "u.ms", maxTurn: "u.s", tgtSize: "u.px" };
 function updateRangeFill() {
-  document.querySelectorAll("input[type=range]").forEach((r) => {
-    r.style.setProperty("--p", ((r.value - r.min) / (r.max - r.min)) * 100 + "%");
+  document.querySelectorAll<HTMLInputElement>("input[type=range]").forEach((r) => {
+    r.style.setProperty("--p", ((+r.value - +r.min) / (+r.max - +r.min)) * 100 + "%");
     const o = document.getElementById("rv-" + r.id), v = String(Number(Number(r.value).toFixed(2)));
     if (o) { o.textContent = RANGE_UNIT[r.id] ? t(RANGE_UNIT[r.id], { v }) : v; o.classList.toggle("changed", TICKS[r.id] && Number(r.value) !== (TICK_DEF[r.id] ?? AUDIO_DEFAULTS[r.id])); }
   });
@@ -58,43 +60,43 @@ setUiLang(store.get("uiLang", /^zh/i.test(navigator.language || "") ? "zh" : "en
 function applyI18n() {
   document.documentElement.lang = getUiLang() === "zh" ? "zh-CN" : "en";
   document.title = t("app");
-  document.querySelectorAll("[data-i18n]").forEach((n) => (n.textContent = t(!SERVER_API && n.dataset.i18n === "set.keyHint" ? "set.keyHintByok" : n.dataset.i18n)));
-  document.querySelectorAll("[data-i18n-ph]").forEach((n) => (n.placeholder = t(n.dataset.i18nPh)));
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((n) => (n.textContent = t(!SERVER_API && n.dataset.i18n === "set.keyHint" ? "set.keyHintByok" : n.dataset.i18n!)));
+  document.querySelectorAll<HTMLInputElement>("[data-i18n-ph]").forEach((n) => (n.placeholder = t(n.dataset.i18nPh!)));
   fillLangSelects();
-  document.querySelectorAll("section.sess h3").forEach((h) => (h.dataset.chip = t("set.sessChip")));
+  document.querySelectorAll<HTMLElement>("section.sess h3").forEach((h) => (h.dataset.chip = t("set.sessChip")));
   $("#buildVer").textContent = t("set.ver", { v: BUILD });
 }
 
 function fillLangSelects() {
-  document.querySelectorAll("select.srcLangs").forEach((s) => { const v = s.value; s.replaceChildren(...Object.keys(LANGS).map((c) => el("option", { value: c, textContent: srcName(c) }))); if (v) s.value = v; });
-  document.querySelectorAll("select.tgtLangs").forEach((s) => { const v = s.value; s.replaceChildren(...Object.keys(TARGETS).map((c) => el("option", { value: c, textContent: tgtName(c) }))); if (v) s.value = v; });
+  document.querySelectorAll<HTMLSelectElement>("select.srcLangs").forEach((s) => { const v = s.value; s.replaceChildren(...Object.keys(LANGS).map((c) => el("option", { value: c, textContent: srcName(c) }))); if (v) s.value = v; });
+  document.querySelectorAll<HTMLSelectElement>("select.tgtLangs").forEach((s) => { const v = s.value; s.replaceChildren(...Object.keys(TARGETS).map((c) => el("option", { value: c, textContent: tgtName(c) }))); if (v) s.value = v; });
 }
 
 // ---------- 模板 ----------
 // 模板 = { id, name, source, target, description, style, asrPrompt, glossary(文本) }
 // 内置模板随页面更新;改过的内置模板以同 id 存在本机,可恢复内置版本
-const GENERAL = { id: "general", source: "ja", target: "zh-Hans", description: "", style: "", asrPrompt: "", glossary: "" };
-function builtins() { return [...BUILTIN, { ...GENERAL, name: t("tpl.blank") }]; }
-function userTemplates() { return store.json("templates", []); }
-function allTemplates() {
-  const user = userTemplates(), byId = new Map(user.map((x) => [x.id, x]));
-  const out = builtins().map((b) => (byId.has(b.id) ? { ...b, ...byId.get(b.id), builtin: true, modified: true } : { ...b, builtin: true }));
+const GENERAL: Omit<Template, "name"> = { id: "general", source: "ja", target: "zh-Hans", description: "", style: "", asrPrompt: "", glossary: "" };
+function builtins(): Template[] { return [...(BUILTIN as Template[]), { ...GENERAL, name: t("tpl.blank") }]; }
+function userTemplates(): Template[] { return store.json("templates", []); }
+function allTemplates(): Template[] {
+  const user = userTemplates(), byId = new Map(user.map((x) => [x.id, x] as const));
+  const out: Template[] = builtins().map((b) => (byId.has(b.id) ? { ...b, ...byId.get(b.id), builtin: true, modified: true } : { ...b, builtin: true }));
   return out.concat(user.filter((x) => !builtins().some((b) => b.id === x.id)));
 }
-function getTemplate(id) { return allTemplates().find((x) => x.id === id); }
-function putTemplate(tp) {
+function getTemplate(id: string): Template | undefined { return allTemplates().find((x) => x.id === id); }
+function putTemplate(tp: Template): void {
   const prev = getTemplate(tp.id), voices = tp.voices !== undefined ? tp.voices : prev && prev.voices; // 编辑模板时草稿里没有声纹库,沿用原来的
   const clean = { ...(voices && Object.keys(voices).length ? { voices } : {}), id: tp.id, name: tp.name, source: tp.source, target: tp.target, description: tp.description || "", style: tp.style || "", asrPrompt: tp.asrPrompt || "", spkNotes: tp.spkNotes || "", glossary: tp.glossary || "", updatedAt: Date.now() };
   store.set("templates", JSON.stringify(userTemplates().filter((x) => x.id !== tp.id).concat(clean)));
   if (cfg.tpl && cfg.tpl.id === tp.id) refreshTemplate();
 }
-function removeTemplate(id) {
+function removeTemplate(id: string): void {
   store.set("templates", JSON.stringify(userTemplates().filter((x) => x.id !== id)));
   if (cfg.tpl && cfg.tpl.id === id) refreshTemplate();
 }
 function newId() { return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 // 收音参数默认值(和设置面板的控件 id 一一对应);和默认值相同就不落盘,以后改默认值设备会跟着变
-const AUDIO_DEFAULTS = { gain: "auto", maxGain: 40, agcTarget: 14, vad: VAD, silence: 600, prefix: 300, maxTurn: 8, nr: "off", micAgc: true, micNs: false, micEc: false };
+const AUDIO_DEFAULTS: Record<string, string | number | boolean> = { gain: "auto", maxGain: 40, agcTarget: 14, vad: VAD, silence: 600, prefix: 300, maxTurn: 8, nr: "off", micAgc: true, micNs: false, micEc: false };
 function saveAudioSettings() {
   for (const [id, d] of Object.entries(AUDIO_DEFAULTS)) { const e = $("#" + id), v = e.type === "checkbox" ? String(e.checked) : e.value; sset(id, v === String(d) ? null : v); }
 }
@@ -155,22 +157,22 @@ function applySettings() {
 
 // ---------- 字幕列表 ----------
 let follow = true;
-function sessKey(ss = state.curSess) { return ss ? ss.id : "none"; }
+function sessKey(ss: Session | null = state.curSess): string { return ss ? ss.id : "none"; }
 // 会话的字幕被清空、重新处理或删除时加一。在途的翻译、防抖中的保存发现代数变了就丢弃,
 // 免得旧结果按 id 写到新行上(重新处理会从 id 1 重新编号),或者把已删会话的数据写回存储
-const linesGen = new Map();
-function curGen(key) { return linesGen.get(key) || 0; }
-function bumpGen(key) { linesGen.set(key, curGen(key) + 1); }
+const linesGen = new Map<string, number>();
+function curGen(key: string): number { return linesGen.get(key) || 0; }
+function bumpGen(key: string): void { linesGen.set(key, curGen(key) + 1); }
 function showEmptyHint() {
   if (isFileSess()) return;
   if (lines.length || $("#log").children.length) return;
   $("#log").append(el("div", { className: "empty", id: "emptyHint", textContent: t(cfg.hasKey ? "live.empty" : "live.emptyKey") }));
 }
-function addLine(id, raw) {
+function addLine(id: number, raw: string): Line {
   const h = $("#emptyHint"); if (h) h.remove();
   const e = el("div", { className: "row pending" }, el("div", { className: "tgt", textContent: t("line.translating") }), el("div", { className: "src", textContent: raw }));
   $("#log").append(e);
-  const line = { id, raw, src: raw, tgt: "", t: new Date(), el: e, done: false };
+  const line: Line = { id, raw, src: raw, tgt: "", t: new Date(), el: e, done: false };
   e.onclick = () => { if (isFileSess() && line.ms != null) seekTo(line.ms); };
   lines.push(line);
   scrollEnd();
@@ -178,7 +180,7 @@ function addLine(id, raw) {
   return line;
 }
 // 字幕存到本地(按会话分开,见 linestore.ts):刷新、误触下拉刷新、iOS 回收标签页之后打开还在
-let saveLinesTimer = null, pendingSave = null;
+let saveLinesTimer: ReturnType<typeof setTimeout> | undefined, pendingSave: (() => void) | null = null;
 function saveLines() {
   clearTimeout(saveLinesTimer);
   const ss = state.curSess, key = sessKey(ss), gen = curGen(key);
@@ -197,12 +199,12 @@ function restoreLines() {
   const saved = state.lineStore.get(sessKey());
   if (!saved.length) return showEmptyHint();
   for (const s of saved) {
-    const line = addLine(s.id, s.raw);
-    line.src = s.src ?? s.ja ?? s.raw; line.tgt = s.tgt ?? s.zh ?? ""; line.t = new Date(s.t);
-    if (s.s != null) setLineTime(line, s.s, s.e);
+    const line = addLine(s.id, s.raw as string);
+    line.src = (s.src ?? s.ja ?? s.raw) as string; line.tgt = s.tgt ?? s.zh ?? ""; line.t = new Date(s.t as number);
+    if (s.s != null) setLineTime(line, s.s, s.e as number);
     if (s.k != null) { line.spk = s.k; line.spc = s.kc; if (s.kb) line.spkBy = s.kb; paintSpk(line); }
     if (s.done) { line.done = true; renderLine(line, false); }
-    else { line.el.className = "row"; line.el.querySelector(".tgt").textContent = t("line.unfinished"); }
+    else { line.el.className = "row"; line.el.querySelector(".tgt")!.textContent = t("line.unfinished"); }
     if (line.done && line.src) history.push(line);
     state.nextId = Math.max(state.nextId, s.id);
   }
@@ -210,39 +212,39 @@ function restoreLines() {
   cancelSave(); // 只是恢复显示,不算新的活动,别改会话的最后更新时间
 }
 // 超长的一条(几个人的话被并成一句)按句末标点分行显示,内容不变
-function breakLong(s) { return s.length > (CJK.test(s) ? 40 : 90) ? s.replace(/([。！？]+[」』）)]*|[.!?]+["')\]]*(?=\s))\s*(?=\S)/g, "$1\n") : s; }
+function breakLong(s: string): string { return s.length > (CJK.test(s) ? 40 : 90) ? s.replace(/([。！？]+[」』）)]*|[.!?]+["')\]]*(?=\s))\s*(?=\S)/g, "$1\n") : s; }
 // 只有几个字的碎句(「那……」「好。」「OK.」)且紧跟上一条,就并进上一条,少占一行
 const MERGE_GAP_MS = 3000;
-function isShort(s) {
+function isShort(s: string): boolean {
   const x = s.replace(/[\s。、！？!?,.，…「」『』()（）ー〜~"']/g, "");
   return CJK.test(x) ? x.length <= 4 : s.trim().split(/\s+/).filter(Boolean).length <= 2;
 }
-function tryMerge(line) {
+function tryMerge(line: Line): boolean {
   if (isFileSess()) return false; // 文件会话按说话人断句:不合并,免得把不同人的话拼成一行
   const i = lines.indexOf(line), prev = lines[i - 1];
   if (i < 1 || !prev.done || !prev.tgt || !prev.el.isConnected || prev.tgt.length > 60) return false;
-  if (line.t - (prev.tEnd || prev.t) > MERGE_GAP_MS || !isShort(line.src)) return false;
+  if (+line.t - +(prev.tEnd || prev.t) > MERGE_GAP_MS || !isShort(line.src)) return false;
   prev.src += " " + line.src; prev.tgt += " " + line.tgt; prev.raw += " " + line.raw; prev.tEnd = line.t;
   if (line.endMs != null) prev.endMs = line.endMs;
-  prev.el.querySelector(".tgt").textContent = breakLong(prev.tgt);
-  prev.el.querySelector(".src").textContent = breakLong(prev.src);
+  prev.el.querySelector(".tgt")!.textContent = breakLong(prev.tgt);
+  prev.el.querySelector(".src")!.textContent = breakLong(prev.src);
   line.el.remove(); lines.splice(i, 1); saveLines(); scrollEnd();
   return true;
 }
-function renderLine(line, merge = true) {
+function renderLine(line: Line, merge = true): void {
   line.done = true; saveLines();
   if (!line.tgt.trim()) line.tgt = "";
-  if (!line.tgt && line.failed) { line.el.className = "row"; line.el.querySelector(".tgt").textContent = t("line.failed"); line.el.querySelector(".src").textContent = breakLong(line.src || line.raw); return; }
+  if (!line.tgt && line.failed) { line.el.className = "row"; line.el.querySelector(".tgt")!.textContent = t("line.failed"); line.el.querySelector(".src")!.textContent = breakLong(line.src || line.raw); return; }
   if (!line.tgt) {
     diag.noise++; showLat();
     // 原始识别有实际内容(不只是标点/单个语气词)就别删,灰显原文
-    if (/[\p{L}]{3,}/u.test(line.raw)) { line.src = line.raw; line.el.className = "row pending"; line.el.querySelector(".tgt").textContent = t("line.noise"); line.el.querySelector(".src").textContent = line.raw; return; }
+    if (/[\p{L}]{3,}/u.test(line.raw)) { line.src = line.raw; line.el.className = "row pending"; line.el.querySelector(".tgt")!.textContent = t("line.noise"); line.el.querySelector(".src")!.textContent = line.raw; return; }
     line.el.remove(); return;
   }
   if (merge && tryMerge(line)) return;
   line.el.className = "row";
-  line.el.querySelector(".tgt").textContent = breakLong(line.tgt);
-  line.el.querySelector(".src").textContent = breakLong(line.src);
+  line.el.querySelector(".tgt")!.textContent = breakLong(line.tgt);
+  line.el.querySelector(".src")!.textContent = breakLong(line.src);
   scrollEnd();
 }
 function scrollEnd() { if (follow) { const m = $("#log"); m.scrollTop = m.scrollHeight; } }
@@ -254,25 +256,25 @@ $("#log").addEventListener("scroll", () => {
 let userScrolled = false;
 $("#log").addEventListener("touchstart", () => (userScrolled = true), { passive: true });
 $("#log").addEventListener("wheel", () => (userScrolled = true), { passive: true });
-function setFollow(v) { follow = v; const b = $("#follow"); b.textContent = t(v ? "live.follow" : "live.unfollow"); b.classList.toggle("off", !v); if (v) { userScrolled = false; scrollEnd(); } }
+function setFollow(v: boolean): void { follow = v; const b = $("#follow"); b.textContent = t(v ? "live.follow" : "live.unfollow"); b.classList.toggle("off", !v); if (v) { userScrolled = false; scrollEnd(); } }
 $("#follow").onclick = () => setFollow(!follow);
 
 // ---------- 翻译(OpenAI Chat Completions) ----------
-const queue = [];
-const history = [];
+const queue: Line[] = [];
+const history: Line[] = [];
 
 // ---------- 识别(OpenAI Realtime 转写会话,WebSocket) ----------
-let reconnectTimer = null;
-const partial = new Map();
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+const partial = new Map<string, string>();
 // 流式模型:不支持 turn_detection,整段音频只在一个 item 里不断吐 delta,没有 completed。
 // 所以客户端按句末标点切句;停顿 LIVE_IDLE_MS 没新 delta 就把剩下的也当一句,并 commit 一下让服务端开新 item。
 const STREAMING_ASR = new Set(["gpt-live-transcribe", "gpt-realtime-whisper"]);
 const LIVE_IDLE_MS = 2000;
-let liveBuf = "", liveIdle = null, liveUncommitted = false;
+let liveBuf = "", liveIdle: ReturnType<typeof setTimeout> | null = null, liveUncommitted = false;
 function isStreamingAsr() { return STREAMING_ASR.has(cfg.asrModel); }
 function sessionConfig() {
   const streaming = isStreamingAsr();
-  const transcription = { model: cfg.asrModel };
+  const transcription: { model: string; language?: string; keywords?: string[]; prompt?: string } = { model: cfg.asrModel };
   const lang = (LANGS[cfg.tpl.source] || LANGS.auto).asr;
   if (lang) transcription.language = lang;
   // 实测 gpt-transcribe:关键词 + 提示一起给最准(只给提示时节目名写成片假名,都不给时羊宮妃那听成陽空ひな)
@@ -287,27 +289,27 @@ function sessionConfig() {
     turn_detection: streaming ? null : { type: "server_vad", threshold: cfg.vad, prefix_padding_ms: cfg.prefix, silence_duration_ms: cfg.silence },
   } } };
 }
-function emitLine(text) {
+function emitLine(text: string): void {
   // 只有标点/空白的碎片(比如 delta 开头单独一个「。」)丢掉
   if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
   diag.asr++; queue.push(addLine(++state.nextId, text)); pumpTranslate(); showLat();
 }
-function liveDelta(delta) {
+function liveDelta(delta: string): void {
   liveBuf += delta; liveUncommitted = true;
   // 日中文只按全角句末标点断句:半角 ! ? 常出现在节目名里(EXTEND STEP HOOOOPE!);其他语言按半角句末 + 空格
   const re = ["ja", "zh"].includes(cfg.tpl.source) ? /^[\s\S]*?[。！？]+[」』）)]*/ : /^[\s\S]*?(?:[。！？]+[」』）)]*|[.!?]+["')\]]*(?=\s))/;
-  let m;
+  let m: RegExpMatchArray | null;
   while ((m = liveBuf.match(re))) {
     emitLine(m[0].trim());
     liveBuf = liveBuf.slice(m[0].length);
   }
   liveBuf = liveBuf.replace(/^\s+/, "");
   $("#partial").textContent = liveBuf;
-  clearTimeout(liveIdle);
+  clearTimeout(liveIdle ?? undefined);
   liveIdle = setTimeout(liveFlush, LIVE_IDLE_MS);
 }
 function liveFlush() {
-  clearTimeout(liveIdle); liveIdle = null;
+  clearTimeout(liveIdle ?? undefined); liveIdle = null;
   const s = liveBuf.trim(); liveBuf = "";
   $("#partial").textContent = "";
   emitLine(s);
@@ -317,13 +319,13 @@ function liveFlush() {
 let speechSince = 0, turnEndAt = 0;
 // 实时延迟显示:翻译 = 请求往返;识别 = 云端判定一句结束(或强制断句)到出识别结果,流式模型没有句末信号所以不测
 const lat = { asr: 0, mt: 0, mtAvg: 0 };
-const mtHist = [];
+const mtHist: number[] = [];
 const diag = { asr: 0, noise: 0, err: 0, deltas: 0 }; // 现场排障计数
-function fmtS(ms) { return ms ? t("sec", { s: (ms / 1000).toFixed(1) }) : "—"; }
+function fmtS(ms: number): string { return ms ? t("sec", { s: (ms / 1000).toFixed(1) }) : "—"; }
 function showLat() {
   const asr = isStreamingAsr() ? t("lat.stream") : fmtS(lat.asr);
   const gain = state.running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
-  const item = (k, v, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
+  const item = (k: string, v: string | number, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
   $("#ibItems").replaceChildren(...[
     isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
     queue.length ? item("ib.queue", queue.length, "warn") : null,
@@ -341,14 +343,14 @@ const cost = {
 };
 let costShownAt = 0;
 function showCost() {
-  const usd = (v) => "$" + v.toFixed(v < 1 ? 3 : 2);
+  const usd = (v: number) => "$" + v.toFixed(v < 1 ? 3 : 2);
   $("#costOut").textContent = t("cost", { a: usd(cost.asr), m: usd(cost.mt), t: usd(cost.total()) });
 }
-function addAsrCost(seconds, model = cfg.asrModel) {
+function addAsrCost(seconds: number, model = cfg.asrModel): void {
   cost.asr += asrCost(seconds, model);
   if (performance.now() - costShownAt > 1000) { costShownAt = performance.now(); cost.save(); showLat(); }
 }
-function addMtCost(model, u, extra = 0) {
+function addMtCost(model: string, u: Usage | null | undefined, extra = 0): void {
   const usd = mtCost(model, u, extra);
   if (usd === null) return; // 没有 usage 或 ChatGPT 订阅:不计费
   cost.mt += usd;
@@ -366,9 +368,9 @@ function connect() {
   setStatus("status.connecting", "warn");
   state.ws = cfg.useServer ? new WebSocket(url) : new WebSocket(url, ["realtime", "openai-insecure-api-key." + cfg.apiKey]);
   liveUncommitted = false;
-  state.ws.onopen = () => { state.ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() })); setStatus("status.listening", "on"); showLat(); };
+  state.ws.onopen = () => { state.ws!.send(JSON.stringify({ type: "session.update", session: sessionConfig() })); setStatus("status.listening", "on"); showLat(); };
   state.ws.onmessage = (ev) => {
-    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    let m: any; try { m = JSON.parse(ev.data); } catch { return; } // 服务端事件的 JSON,字段随 type 变
     // 强制断句:持续噪声/背景音乐下 server VAD 一直认为在说话,一句话要等很久才出
     if (m.type === "input_audio_buffer.speech_started") speechSince = performance.now();
     else if (m.type === "input_audio_buffer.speech_stopped") { speechSince = 0; turnEndAt = performance.now(); }
@@ -407,56 +409,56 @@ function connect() {
 }
 // 状态:key 是 I18N 键,extra 是附加的原样文字(增益倍数等)
 let statusKey = "status.idle", statusKind = "", statusExtra = "";
-function setStatus(key, kind, extra = "") { statusKey = key; statusKind = kind || ""; statusExtra = extra; const s = $("#status"); s.textContent = t(key) + extra; s.className = "chip" + (kind ? " " + kind : ""); }
+function setStatus(key: string, kind?: string, extra = ""): void { statusKey = key; statusKind = kind || ""; statusExtra = extra; const s = $("#status"); s.textContent = t(key) + extra; s.className = "chip" + (kind ? " " + kind : ""); }
 
 // ---------- 麦克风 → 24 kHz PCM16 ----------
-let stream = null, actx = null, tap = null, wakeLock = null;
-let rs = null, agc = new Agc(), gainShownAt = 0;
+let stream: MediaStream | null = null, actx: AudioContext | null = null, tap: AudioWorkletNode | null = null, wakeLock: WakeLockSentinel | null = null;
+let rs: Resampler | null = null, agc = new Agc(), gainShownAt = 0;
 // 数字增益:离声源远、收音小声时放大(见 audio.ts);信息栏上的倍数每秒最多刷新一次
-function applyGain(x) {
+function applyGain(x: Float32Array): Float32Array {
   x = agc.apply(x, cfg.gain, cfg.maxGain, cfg.agcTarget);
   if (x.length && state.running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
   return x;
 }
 // 信号格:放大后的音量分 5 格,只在格数变化时改 DOM
-function setSignal(v) {
+function setSignal(v: number): void {
   const n = sigStep(v), s = $("#signal");
-  if (s.dataset.level !== String(n)) s.dataset.level = n;
+  if (s.dataset.level !== String(n)) s.dataset.level = String(n);
 }
 let lastSampleAt = 0;
-function onSamples(input) {
+function onSamples(input: Float32Array): void {
   if (!actx) return; // 停止后 worklet 可能还有一条消息在路上
   lastSampleAt = performance.now();
-  let x = rs.resample(input);
+  let x = rs!.resample(input);
   x = applyGain(x);
   let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
   setSignal(Math.sqrt(rms / (x.length || 1)) * 4);
-  for (const pcm of rs.chunk(x)) {
+  for (const pcm of rs!.chunk(x)) {
     if (state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
   }
 }
 async function startMic() {
   // iOS Safari:AudioContext 要在点击的同步阶段建好并 resume(await 之后就不算用户手势了);
   // 也不能指定 24 kHz(和硬件采样率不一致时麦克风只出静音),统一用默认采样率再在 JS 里重采样
-  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const Ctx: typeof AudioContext = window.AudioContext || (window as any).webkitAudioContext; // 旧版 Safari 只有带前缀的
   actx = new Ctx(); rs = new Resampler(actx.sampleRate);
   const resumed = actx.resume().catch(() => {});
   const want = { channelCount: 1, ...cfg.mic };
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: cfg.micId ? { ...want, deviceId: { exact: cfg.micId } } : want }); }
   catch (e) {
     // 选定的麦克风拔掉了:退回系统默认,不让整个收音失败
-    if (!cfg.micId || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(e.name)) throw e;
+    if (!cfg.micId || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes((e as Error).name)) throw e;
     stream = await navigator.mediaDevices.getUserMedia({ audio: want }); flash(t("flash.micFallback"));
   }
   listMics();
-  await resumed; actx.resume().catch(() => {});
+  await resumed; actx!.resume().catch(() => {});
   const code = `class Tap extends AudioWorkletProcessor { process(inputs) { const c = inputs[0] && inputs[0][0]; if (c) this.port.postMessage(c.slice(0)); return true; } } registerProcessor("tap", Tap);`;
-  await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "application/javascript" })));
-  const src = actx.createMediaStreamSource(stream);
-  tap = new AudioWorkletNode(actx, "tap");
+  await actx!.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "application/javascript" })));
+  const src = actx!.createMediaStreamSource(stream);
+  tap = new AudioWorkletNode(actx!, "tap");
   tap.port.onmessage = (e) => onSamples(e.data);
-  const mute = actx.createGain(); mute.gain.value = 0;
-  src.connect(tap); tap.connect(mute); mute.connect(actx.destination);
+  const mute = actx!.createGain(); mute.gain.value = 0;
+  src.connect(tap); tap.connect(mute); mute.connect(actx!.destination);
 }
 async function keepAwake() {
   try { wakeLock = await navigator.wakeLock.request("screen"); } catch {}
@@ -467,7 +469,7 @@ async function start() {
   applySettings();
   if (!cfg.hasKey) { openSettings(); $("#apiKey").focus(); return; }
   if (!window.isSecureContext || !navigator.mediaDevices) { setStatus("status.https", "err"); flash(t("flash.https")); return; }
-  try { await startMic(); } catch (e) { setStatus("status.noMic", "err"); flash(t("flash.mic") + e.message); return; }
+  try { await startMic(); } catch (e) { setStatus("status.noMic", "err"); flash(t("flash.mic") + (e as Error).message); return; }
   state.running = true; micBroken = false; lastSampleAt = performance.now();
   $("#go").textContent = t("live.stop"); $("#go").classList.add("stop");
   keepAwake();
@@ -529,12 +531,12 @@ async function restartMic() {
 }
 
 // ---------- 视图切换 ----------
-function show(v) {
+function show(v: View): void {
   if (v === "live" && !state.curSess) v = "home";
   state.view = v; document.body.dataset.view = v;
   for (const [id, name] of [["#viewHome", "home"], ["#viewTpl", "tpl"], ["#viewLive", "live"], ["#viewCreate", "create"]]) $(id).hidden = v !== name;
   $("#toHome").hidden = v === "home"; $("#toTpl").hidden = v === "tpl";
-  $("#title").textContent = v === "live" ? state.curSess.name : v === "create" ? t(creator.editId ? "create.titleEdit" : "create.titleNew") : v === "tpl" ? t("tpl.title") : t("app");
+  $("#title").textContent = v === "live" ? state.curSess!.name : v === "create" ? t(creator.editId ? "create.titleEdit" : "create.titleNew") : v === "tpl" ? t("tpl.title") : t("app");
   document.title = $("#title").textContent;
   if (v === "home") renderSessions();
   if (v === "tpl") renderHome();
@@ -553,14 +555,23 @@ $("#newSession").onclick = () => show("tpl");
 // 固定 gpt-transcribe + server VAD:每段都有 audio_start_ms / audio_end_ms,字幕能和视频精确对齐(以后声纹切片也靠它)
 // 实测 4 倍速与 1 倍速识别结果一致,8 倍速开始丢字
 const FILE_SPEED = 4, MEDIA_BASE = new Date(2000, 0, 1).getTime();
-const fileJob = { active: false, phase: "idle", sid: null, pcm: null, pos: 0, total: 0, t0: 0, from: 0, ws: null, items: {}, pending: 0, lastEnd: 0, speakFrom: null, lastEvt: 0, err: "", extractPct: 0 };
+/** 文件处理任务的状态(位置、时间都是毫秒;items 按转写 item_id 记一段的起止) */
+interface FileJob {
+  active: boolean; phase: string; sid: string | null; pcm: Int16Array | null;
+  pos: number; total: number; t0: number; from: number; ws: WebSocket | null;
+  items: Record<string, { s?: number; e?: number }>; pending: number; lastEnd: number; speakFrom: number | null; lastEvt: number;
+  err: string; extractPct: number; loadPct?: number;
+  /** 强制断句时发 commit 的位置,按顺序对应之后的 committed 事件 */
+  forcedAt: number[]; commitEnd: number | null; flushAt: number;
+}
+const fileJob: FileJob = { active: false, phase: "idle", sid: null, pcm: null, pos: 0, total: 0, t0: 0, from: 0, ws: null, items: {}, pending: 0, lastEnd: 0, speakFrom: null, lastEvt: 0, err: "", extractPct: 0, forcedAt: [], commitEnd: null, flushAt: 0 };
 function isFileSess() { return !!(state.curSess && state.curSess.kind === "file"); }
-function setLineTime(line, s, e) {
+function setLineTime(line: Line, s: number, e: number): void {
   line.ms = s; line.endMs = e; line.t = new Date(MEDIA_BASE + e);
   if (!line.el.querySelector(".tm")) line.el.prepend(el("div", { className: "tm", textContent: fmtClock(s) }));
 }
 async function loadLineStore() {
-  for (const [kv, name] of [[idb, "IndexedDB"], [lsKV, "localStorage"]]) {
+  for (const [kv, name] of [[idb, "IndexedDB"], [lsKV, "localStorage"]] as [KV, string][]) {
     const st = new LineStore(kv, storageFailed);
     try { await st.load(); state.lineStore = st; break; } catch (e) { console.warn(name + " unavailable for subtitles", e); }
   }
@@ -570,7 +581,7 @@ async function loadLineStore() {
     let changed = false;
     for (const k of Object.keys(localStorage).filter((k) => k.startsWith("jls.slines."))) {
       const id = k.slice("jls.slines.".length);
-      let arr = null; try { arr = JSON.parse(localStorage.getItem(k)); } catch {}
+      let arr = null; try { arr = JSON.parse(localStorage.getItem(k)!); } catch {}
       const cur = state.lineStore.get(id), merged = Array.isArray(arr) ? mergeLegacy(cur, arr) : cur;
       if (merged.length !== cur.length) {
         if (!(await state.lineStore.set(id, merged))) continue;
@@ -581,31 +592,31 @@ async function loadLineStore() {
     if (changed) saveSessions();
   } catch (e) { console.warn("legacy subtitle migration skipped", e); }
 }
-let mediaUrl = null, pickFor = null;
+let mediaUrl: string | null = null, pickFor: { tplId?: string; reattach?: string } | null = null;
 // 先直接存 File;Safari 无痕模式等不让存 Blob 时,300 MB 以内改存 ArrayBuffer
-async function storeMedia(id, f) {
+async function storeMedia(id: string, f: File): Promise<boolean> {
   try { await idb.put(id, f); return true; } catch {}
   if (f.size > 300 * 1048576) return false;
   try { await idb.put(id, { name: f.name, type: f.type, buf: await f.arrayBuffer() }); return true; } catch { return false; }
 }
-async function loadMedia(id) {
+async function loadMedia(id: string): Promise<File | null> {
   const v = await idb.get(id).catch(() => null);
   return v && v.buf ? new File([v.buf], v.name, { type: v.type }) : v || null;
 }
-function pickMedia(tplId) { pickFor = { tplId }; $("#mediaFile").value = ""; $("#mediaFile").click(); }
-$("#reattach").onclick = () => { pickFor = { reattach: state.curSess.id }; $("#mediaFile").value = ""; $("#mediaFile").click(); };
+function pickMedia(tplId: string): void { pickFor = { tplId }; $("#mediaFile").value = ""; $("#mediaFile").click(); }
+$("#reattach").onclick = () => { pickFor = { reattach: state.curSess!.id }; $("#mediaFile").value = ""; $("#mediaFile").click(); };
 $("#mediaFile").onchange = async () => {
   const f = $("#mediaFile").files[0]; if (!f || !pickFor) return;
-  let ss;
-  if (pickFor.reattach) ss = state.sessions.find((x) => x.id === pickFor.reattach);
+  let ss: Session;
+  if (pickFor.reattach) ss = state.sessions.find((x) => x.id === pickFor!.reattach)!;
   else {
-    ss = newSession(pickFor.tplId);
+    ss = newSession(pickFor.tplId!);
     Object.assign(ss, { kind: "file", name: f.name.replace(/\.[^.]+$/, ""), file: { name: f.name, size: f.size, type: f.type, duration: 0 }, progress: 0, done: false });
     saveSessions();
   }
   pickFor = null; state.mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
-  ss.file.stored = await storeMedia(ss.id, f);
-  if (!ss.file.stored) flash(t("file.noStore"));
+  ss.file!.stored = await storeMedia(ss.id, f);
+  if (!ss.file!.stored) flash(t("file.noStore"));
   saveSessions(); useSession(ss.id); show("live");
   if (ss.done) spkAuto(ss);
 };
@@ -614,45 +625,45 @@ async function setupFileView() {
   document.body.classList.toggle("filemode", on);
   $("#playerBox").hidden = $("#fileBar").hidden = !on;
   if (!on) { $("#go").textContent = t(state.running ? "live.stop" : "live.start"); return; }
-  const ss = state.curSess;
-  if (!state.mediaBlob || fileJob.sid !== ss.id) { state.mediaBlob = await loadMedia(ss.id) || (state.mediaBlob && state.mediaBlob.name === ss.file.name && fileJob.sid == null ? state.mediaBlob : null); fileJob.sid = ss.id; fileJob.pcm = null; }
+  const ss = state.curSess!;
+  if (!state.mediaBlob || fileJob.sid !== ss.id) { state.mediaBlob = await loadMedia(ss.id) || (state.mediaBlob && state.mediaBlob.name === ss.file!.name && fileJob.sid == null ? state.mediaBlob : null); fileJob.sid = ss.id; fileJob.pcm = null; }
   if (state.curSess !== ss) return;
   const p = $("#player");
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
   mediaUrl = state.mediaBlob ? URL.createObjectURL(state.mediaBlob) : null;
   if (mediaUrl) p.src = mediaUrl; else p.removeAttribute("src");
-  $("#playerBox").classList.toggle("audio", /^audio\//.test(ss.file.type) || /\.(mp3|m4a|wav|flac|ogg|opus|aac)$/i.test(ss.file.name));
+  $("#playerBox").classList.toggle("audio", /^audio\//.test(ss.file!.type) || /\.(mp3|m4a|wav|flac|ogg|opus|aac)$/i.test(ss.file!.name));
   $("#playerBox").hidden = !state.mediaBlob;
   $("#reattach").hidden = true; // 缺文件时主按钮就是「重新选择原文件」
-  p.onloadedmetadata = () => { if (isFinite(p.duration) && !ss.file.duration) { ss.file.duration = p.duration * 1000; saveSessions(); fileProgress(); } };
+  p.onloadedmetadata = () => { if (isFinite(p.duration) && !ss.file!.duration) { ss.file!.duration = p.duration * 1000; saveSessions(); fileProgress(); } };
   fileJob.phase = fileJob.active ? fileJob.phase : ss.done ? "done" : ss.progress ? "paused" : "idle";
   fileProgress();
 }
 // 播放时叠加当前字幕、高亮对应行
 $("#player").ontimeupdate = () => {
   const ms = $("#player").currentTime * 1000;
-  let cur = null;
-  for (const l of lines) { if (l.ms == null) continue; if (l.ms <= ms + 150 && ms <= l.endMs + 400) cur = l; if (l.ms > ms + 150) break; }
+  let cur: Line | null = null;
+  for (const l of lines) { if (l.ms == null) continue; if (l.ms <= ms + 150 && ms <= l.endMs! + 400) cur = l; if (l.ms > ms + 150) break; }
   $("#ovl .ot").textContent = cur && cur.tgt ? spkPrefix(cur) + cur.tgt : ""; $("#ovl .os").textContent = cur ? cur.src : "";
   if (state.spkStopAt != null && ms >= state.spkStopAt) { state.spkStopAt = null; $("#player").pause(); }
   const prev = $("#log .row.active");
   if (cur && prev !== cur.el) { if (prev) prev.classList.remove("active"); cur.el.classList.add("active"); if (!$("#player").paused) cur.el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
   else if (!cur && prev) prev.classList.remove("active");
 };
-function seekTo(ms) { const p = $("#player"); if (!p.src) return; state.spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
+function seekTo(ms: number): void { const p = $("#player"); if (!p.src) return; state.spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
 // extractPcm 的进度写进 fileJob,和文件翻译进度条共用
-const pcmCb = {
+const pcmCb: ExtractCallbacks = {
   onPhase(ph) { fileJob.phase = ph; if (ph === "loading") fileJob.loadPct = 0; else fileJob.extractPct = 0; fileProgress(); },
   onLoad(p) { fileJob.loadPct = p; fileProgress(); },
   onExtract(p) { fileJob.extractPct = p; fileProgress(); },
 };
 // 按说话人断句时停顿 0.3 秒就断句(快速接话时换人处更容易断开),识别费用不变
 function fileConfig() {
-  const keep = [cfg.asrModel, cfg.silence]; cfg.asrModel = "gpt-transcribe"; cfg.silence = Math.min(cfg.silence, 300); // 短停顿就断句,便于区分说话人
+  const keep: [string, number] = [cfg.asrModel, cfg.silence]; cfg.asrModel = "gpt-transcribe"; cfg.silence = Math.min(cfg.silence, 300); // 短停顿就断句,便于区分说话人
   const c = sessionConfig(); [cfg.asrModel, cfg.silence] = keep; return c;
 }
 async function fileStart() {
-  const ss = state.curSess;
+  const ss = state.curSess!;
   applySettings();
   if (!cfg.hasKey) { openSettings(); $("#apiKey").focus(); return; }
   if (!state.mediaBlob) { $("#reattach").click(); return; }
@@ -668,19 +679,19 @@ async function fileStart() {
   fileJob.active = true; fileJob.err = ""; setGoFile(); setStatus("status.processing", "on"); keepAwake();
   try {
     if (!fileJob.pcm) fileJob.pcm = await extractPcm(state.mediaBlob, pcmCb);
-  } catch (e) { fileJob.active = false; fileJob.phase = "error"; fileJob.err = e.message; setGoFile(); fileProgress(); setStatus("status.paused", "err"); return; }
+  } catch (e) { fileJob.active = false; fileJob.phase = "error"; fileJob.err = (e as Error).message; setGoFile(); fileProgress(); setStatus("status.paused", "err"); return; }
   if (!fileJob.active || state.curSess !== ss) return;
-  fileJob.total = fileJob.pcm.length / 24; ss.file.duration = fileJob.total; saveSessions();
+  fileJob.total = fileJob.pcm!.length / 24; ss.file!.duration = fileJob.total; saveSessions();
   fileJob.from = fileJob.pos = Math.min(ss.progress || 0, fileJob.total); fileJob.items = {}; fileJob.pending = 0; fileJob.forcedAt = []; fileJob.commitEnd = null; fileJob.lastEnd = fileJob.from; fileJob.speakFrom = null; fileJob.phase = "run";
   fileConnect(ss);
 }
-function fileConnect(ss) {
+function fileConnect(ss: Session): void {
   const url = cfg.apiBase.replace(/^http/, "ws") + "/realtime?intent=transcription";
   const ws2 = (fileJob.ws = cfg.useServer ? new WebSocket(url) : new WebSocket(url, ["realtime", "openai-insecure-api-key." + cfg.apiKey]));
   const J = fileJob, off = J.from; // 转写会话里的 audio_*_ms 从本次连接开始送的第一帧算起
   ws2.onopen = () => { ws2.send(JSON.stringify({ type: "session.update", session: fileConfig() })); J.t0 = performance.now(); J.lastEvt = performance.now(); filePump(ws2, ss); };
   ws2.onmessage = (ev) => {
-    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    let m: any; try { m = JSON.parse(ev.data); } catch { return; } // 服务端事件的 JSON
     J.lastEvt = performance.now();
     if (m.type === "input_audio_buffer.speech_started") { (J.items[m.item_id] ||= {}).s = off + m.audio_start_ms; J.speakFrom = off + m.audio_start_ms; J.pending++; }
     else if (m.type === "input_audio_buffer.speech_stopped") { (J.items[m.item_id] ||= {}).e = off + m.audio_end_ms; J.speakFrom = null; }
@@ -708,13 +719,13 @@ function fileConnect(ss) {
   ws2.onclose = () => { if (J.ws === ws2 && J.active && J.phase !== "finish") { J.err = t("status.reconnect"); filePause(true); } };
 }
 // 按 FILE_SPEED 倍速、每 100 ms 一帧送音频;一句超过「单句最长时长」就强制断句;送完后等最后几段识别和翻译收尾
-function filePump(ws2, ss) {
+function filePump(ws2: WebSocket, ss: Session): void {
   const J = fileJob, CHUNK_MS = 100, N = 2400;
   const tick = () => {
     if (!J.active || J.ws !== ws2 || ws2.readyState !== 1) return;
     const target = Math.min(J.total, J.from + (performance.now() - J.t0) * FILE_SPEED);
     while (J.pos < target) {
-      const i = Math.round(J.pos * 24), chunk = J.pcm.subarray(i, Math.min(i + N, J.pcm.length));
+      const i = Math.round(J.pos * 24), chunk = J.pcm!.subarray(i, Math.min(i + N, J.pcm!.length));
       if (!chunk.length) { J.pos = J.total; break; }
       ws2.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(chunk) }));
       J.pos += CHUNK_MS; addAsrCost(CHUNK_MS / 1000, "gpt-transcribe");
@@ -730,17 +741,17 @@ function filePump(ws2, ss) {
   };
   tick();
 }
-function emitTimed(text, s, e) {
+function emitTimed(text: string, s: number, e: number): void {
   if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
   // 一段里有几句就拆开,时间按字数比例分
   for (const p of splitTimed(text, s, e, ["ja", "zh"].includes(cfg.tpl.source))) {
     diag.asr++; const line = addLine(++state.nextId, p.text); setLineTime(line, Math.round(p.s), Math.round(p.e)); queue.push(line);
-    const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms);
+    const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms!);
     if (j >= 0) { lines.splice(lines.indexOf(line), 1); lines.splice(j, 0, line); lines[j + 1].el.before(line.el); }
   }
   pumpTranslate(); showLat(); saveLines();
 }
-function fileFinish(ss) {
+function fileFinish(ss: Session): void {
   const J = fileJob;
   J.active = false; J.phase = "done"; try { J.ws && J.ws.close(); } catch {} J.ws = null;
   ss.done = true; ss.progress = J.total; saveSessions();
@@ -748,7 +759,7 @@ function fileFinish(ss) {
   setGoFile(); setStatus("status.done", "on"); fileProgress();
   spkAfterFile(ss); // 开着说话人识别:自动识别;之前识别过:先按已有声纹结果标注新字幕,GPT 判定重做
 }
-function filePause(isErr) {
+function filePause(isErr?: boolean): void {
   const J = fileJob;
   J.active = false; try { J.ws && J.ws.close(); } catch {} J.ws = null;
   J.phase = isErr ? "error" : "paused";
@@ -757,7 +768,7 @@ function filePause(isErr) {
 }
 function setGoFile() {
   if (!isFileSess()) return;
-  const ss = state.curSess, g = $("#go");
+  const ss = state.curSess!, g = $("#go");
   if (g.dataset.armed) return;
   g.textContent = t(fileJob.active ? "file.pause" : !state.mediaBlob ? "file.reattach" : ss.done ? "file.redo" : ss.progress ? "file.resume" : "file.start");
   g.classList.toggle("stop", fileJob.active);
@@ -765,9 +776,9 @@ function setGoFile() {
 }
 function fileProgress() {
   if (!isFileSess()) return;
-  const ss = state.curSess, J = fileJob, total = J.total || (ss.file && ss.file.duration) || 0;
+  const ss = state.curSess!, J = fileJob, total = J.total || (ss.file && ss.file.duration) || 0;
   const done = lines.filter((l) => l.done).length, n = lines.length, pos = J.active ? J.pos : ss.progress || 0;
-  let pct = total ? pos / total : 0, txt;
+  let pct = total ? pos / total : 0, txt: string;
   const fill = $("#pfill"); fill.classList.toggle("busy", J.phase === "flush");
   if (J.phase === "loading") { txt = t("file.loading", { pct: Math.round((J.loadPct || 0) * 100) }); pct = J.loadPct || 0; }
   else if (J.phase === "extract") { txt = t("file.extract", { pct: Math.round(J.extractPct * 100) }); pct = J.extractPct; }
@@ -784,9 +795,9 @@ function fileProgress() {
   $("#expSrt").hidden = $("#expVtt").hidden = !lines.some((l) => l.ms != null && l.done);
   setGoFile();
 }
-const makeSubs = (kind) => subtitleFile(kind, lines, $("#showSrc").checked, spkPrefix);
-$("#expSrt").onclick = () => download(fileName(state.curSess.name) + ".srt", makeSubs("srt"), "application/x-subrip");
-$("#expVtt").onclick = () => download(fileName(state.curSess.name) + ".vtt", makeSubs("vtt"), "text/vtt");
+const makeSubs = (kind: "srt" | "vtt") => subtitleFile(kind, lines, $("#showSrc").checked, spkPrefix);
+$("#expSrt").onclick = () => download(fileName(state.curSess!.name) + ".srt", makeSubs("srt"), "application/x-subrip");
+$("#expVtt").onclick = () => download(fileName(state.curSess!.name) + ".vtt", makeSubs("vtt"), "text/vtt");
 
 
 // ---------- 说话人识别(在 speaker-ui.ts) ----------
@@ -802,7 +813,7 @@ function renderHome() {
     const h = el("h3", { textContent: tp.name });
     if (tp.builtin) h.append(el("span", { className: "tag", textContent: t(tp.modified ? "card.modified" : "card.builtin") }));
     if (state.curSess && state.curSess.tplId === tp.id) h.append(el("span", { className: "tag", textContent: t("card.current") }));
-    const btn = (key, fn, primary, icon) => el("button", { className: "btn" + (primary ? " primary" : "") + " i-" + icon, textContent: t(key), onclick: fn });
+    const btn = (key: string, fn: () => void, primary: boolean, icon: string) => el("button", { className: "btn" + (primary ? " primary" : "") + " i-" + icon, textContent: t(key), onclick: fn });
     const btns = el("div", { className: "btns" },
       btn("card.open", () => { newSession(tp.id); show("live"); }, true, "play"),
       btn("card.file", () => pickMedia(tp.id), false, "film"),
@@ -810,7 +821,7 @@ function renderHome() {
       btn("card.dup", () => { putTemplate({ ...tp, id: newId(), name: tp.name + t("card.copy") }); renderHome(); }, false, "copy"),
       btn("card.export", () => exportTemplate(tp), false, "download"));
     if (!tp.builtin || tp.modified) {
-      const del = btn(tp.builtin ? "card.reset" : "card.del", (e) => {
+      const del: HTMLButtonElement = btn(tp.builtin ? "card.reset" : "card.del", () => {
         if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = t("card.delSure"); setTimeout(() => { delete del.dataset.armed; del.textContent = t(tp.builtin ? "card.reset" : "card.del"); }, 3000); return; }
         removeTemplate(tp.id); renderHome();
       }, false, tp.builtin ? "restore" : "trash");
@@ -821,14 +832,14 @@ function renderHome() {
       tp.description ? el("div", { className: "meta desc", textContent: tp.description.slice(0, 120) + (tp.description.length > 120 ? "…" : "") }) : null, btns));
   }
 }
-function exportTemplate(tp) {
+function exportTemplate(tp: Template): void {
   const { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, voices } = tp;
   download((name || "template").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60) + ".json",
     JSON.stringify({ format: "tsuji-template", version: 1, template: { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, ...(voices ? { voices } : {}) } }, null, 2), "application/json");
 }
 $("#importTpl").onclick = () => $("#importFile").click();
-$("#importFile").onchange = async (e) => {
-  const f = e.target.files[0]; e.target.value = "";
+$("#importFile").onchange = async (e: Event) => {
+  const input = e.target as HTMLInputElement, f = input.files![0]; input.value = "";
   if (!f) return;
   try {
     const d = JSON.parse(await f.text()), tp = d.template || d;
@@ -847,7 +858,7 @@ function openSettings() { showCost(); listMics(); $("#settings").hidden = false;
 // 麦克风列表:授权前浏览器不给设备名,只能显示「麦克风 1/2…」
 async function listMics() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-  let devs = [];
+  let devs: MediaDeviceInfo[] = [];
   try { devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput" && d.deviceId && !["default", "communications"].includes(d.deviceId)); } catch {}
   const sel = $("#micDev"), cur = store.get("micId", "");
   sel.replaceChildren(el("option", { value: "", textContent: t("opt.micDefault") }), ...devs.map((d, i) => el("option", { value: d.deviceId, textContent: d.label || t("opt.micN", { n: i + 1 }) })));
@@ -883,32 +894,34 @@ $("#resetAudio").onclick = () => { for (const [id, d] of Object.entries(AUDIO_DE
 function transcriptText() {
   return lines.filter((l) => l.src || l.tgt).map((l) => `[${l.ms != null ? fmtClock(l.ms) : l.t.toTimeString().slice(0, 8)}] ${l.tgt}\n           ${l.src}`).join("\n");
 }
-$("#copyAll").onclick = async (e) => {
-  try { await navigator.clipboard.writeText(transcriptText()); flashBtn(e.target, t("rec.copied")); }
-  catch { flashBtn(e.target, t("rec.copyFail")); }
+$("#copyAll").onclick = async (e: MouseEvent) => {
+  const b = e.target as HTMLElement;
+  try { await navigator.clipboard.writeText(transcriptText()); flashBtn(b, t("rec.copied")); }
+  catch { flashBtn(b, t("rec.copyFail")); }
 };
 $("#saveAll").onclick = () => download(fileName(state.curSess ? state.curSess.name : cfg.tpl.name) + ".txt", transcriptText());
-$("#memoClear").onclick = (e) => { setMemo([]); flashBtn(e.target, t("rec.memoCleared")); };
-$("#resetCost").onclick = (e) => { cost.asr = cost.mt = 0; cost.save(); showLat(); flashBtn(e.target, t("rec.costCleared")); };
+$("#memoClear").onclick = (e: MouseEvent) => { setMemo([]); flashBtn(e.target as HTMLElement, t("rec.memoCleared")); };
+$("#resetCost").onclick = (e: MouseEvent) => { cost.asr = cost.mt = 0; cost.save(); showLat(); flashBtn(e.target as HTMLElement, t("rec.costCleared")); };
 let clearArmed = false;
-$("#clearAll").onclick = (e) => {
-  if (!clearArmed) { clearArmed = true; e.target.textContent = t("rec.clearSure"); setTimeout(() => { clearArmed = false; e.target.textContent = t("rec.clear"); }, 3000); return; }
-  lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; e.target.textContent = t("rec.clear"); setMemo([]);
+$("#clearAll").onclick = (e: MouseEvent) => {
+  const b = e.target as HTMLElement;
+  if (!clearArmed) { clearArmed = true; b.textContent = t("rec.clearSure"); setTimeout(() => { clearArmed = false; b.textContent = t("rec.clear"); }, 3000); return; }
+  lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; b.textContent = t("rec.clear"); setMemo([]);
   cancelSave(); bumpGen(sessKey()); state.lineStore.set(sessKey(), null); if (state.curSess) { state.curSess.count = 0; saveSessions(); } showEmptyHint();
 };
 // 摘要:整段记录一次发给模型;估算超过模型上下文的 40% 就按行切成几段,每段先写详细笔记,最后合并成摘要。
 // 估算偏保守,接口仍报上下文超长时把每段减半重来
-const CONTEXT = { "gpt-6.1-sol": 500000, "gpt-6-luna": 272000 };
-async function recapCall(prompt) {
+const CONTEXT: Record<string, number> = { "gpt-6.1-sol": 500000, "gpt-6-luna": 272000 };
+async function recapCall(prompt: string): Promise<string> {
   const res = await fetch(cfg.apiBase + "/chat/completions", {
     method: "POST", headers: apiHeaders(),
     body: JSON.stringify({ model: cfg.ctModel, reasoning_effort: "medium", messages: [{ role: "user", content: prompt }] }),
   });
-  if (!res.ok) { const txt = await res.text(), err = new Error(res.status + " " + txt.slice(0, 200)); err.tooLong = res.status === 400 && /context|too long|maximum/i.test(txt); throw err; }
+  if (!res.ok) { const txt = await res.text(), err: Error & { tooLong?: boolean } = new Error(res.status + " " + txt.slice(0, 200)); err.tooLong = res.status === 400 && /context|too long|maximum/i.test(txt); throw err; }
   const rd = await res.json(); addMtCost(cfg.ctModel, rd.usage);
   return rd.choices[0].message.content;
 }
-async function makeRecap(rows, onStep, budgetOverride = 0) {
+async function makeRecap(rows: string[], onStep: (msg: string) => void, budgetOverride = 0): Promise<string> {
   const tgt = tgtName(cfg.tpl.target, "en"), ctx = glossaryForLLM(cfg);
   const intro = `a live subtitle log of "${cfg.tpl.name}" (ASR + live correction; may still contain recognition errors)`;
   const final = `Write in ${tgt}, plain text:\n1. Summary (about 300 words or 300 characters): what happened, segments, highlights and important announcements (events, merchandise, release dates — list dates exactly).\n2. Section by section: split by segment/topic, give each a short heading, and rewrite the content as clear, complete prose.\n3. Uncertain points: places where the ASR may have misheard or that cannot be determined.`;
@@ -917,7 +930,7 @@ async function makeRecap(rows, onStep, budgetOverride = 0) {
     const parts = splitByTokens(rows, budgetOverride ? budget : Math.max(budget, 4000));
     try {
       if (parts.length === 1) return await recapCall(`Below is ${intro}. ${final}\n\nTemplate context:\n${ctx}\n\nLog (time | original | live translation):\n${rows.join("\n")}`);
-      const notes = [];
+      const notes: string[] = [];
       for (let i = 0; i < parts.length; i++) {
         onStep(t("rec.recapPart", { i: i + 1, n: parts.length }));
         notes.push(await recapCall(`Below is part ${i + 1} of ${parts.length} of ${intro}. Write detailed notes in ${tgt}, plain text, for a later merge into one summary: go through this part in order, split by segment/topic with the time range and a short heading, and rewrite what was said as clear prose. Keep every announcement, name, number and date exactly. End with a list of places where the ASR may have misheard.\n\nTemplate context:\n${ctx}\n\nLog (time | original | live translation):\n${parts[i].join("\n")}`));
@@ -925,19 +938,20 @@ async function makeRecap(rows, onStep, budgetOverride = 0) {
       onStep(t("rec.recapMerge", { n: parts.length }));
       return await recapCall(`Below are notes on ${parts.length} consecutive parts of ${intro}, written part by part. Merge them into one result. ${final}\n\nTemplate context:\n${ctx}\n\n` + notes.map((x, i) => `=== Part ${i + 1} of ${parts.length} ===\n${x}`).join("\n\n"));
     } catch (e) {
-      if (!e.tooLong || attempt >= 3) throw e;
+      if (!(e as { tooLong?: boolean }).tooLong || attempt >= 3) throw e;
       budget = Math.floor(budget / 2);
     }
   }
 }
-$("#recap").onclick = async (e) => {
+$("#recap").onclick = async (e: MouseEvent) => {
+  const b = e.target as HTMLButtonElement;
   applySettings();
   const rows = lines.filter((l) => l.src).map((l) => `${l.ms != null ? fmtClock(l.ms) : l.t.toTimeString().slice(0, 5)} | ${l.src} | ${l.tgt}`); // 文件会话用视频内时间
   if (!rows.length) { $("#recapOut").textContent = t("rec.recapEmpty"); return; }
-  e.target.disabled = true; $("#recapOut").textContent = t("rec.recapBusy");
+  b.disabled = true; $("#recapOut").textContent = t("rec.recapBusy");
   try { $("#recapOut").textContent = await makeRecap(rows, (m) => ($("#recapOut").textContent = m)); }
-  catch (err) { $("#recapOut").textContent = t("rec.recapFail") + err.message; }
-  e.target.disabled = false;
+  catch (err) { $("#recapOut").textContent = t("rec.recapFail") + (err as Error).message; }
+  b.disabled = false;
 };
 
 // ---------- 启动 ----------
@@ -954,11 +968,11 @@ useSession(store.get("curSession", null));
 setFollow(true);
 setStatus("status.idle");
 showLat();
-show(["home", "tpl", "live", "create"].includes(store.get("view", "")) ? store.get("view", "") : "home");
+show(["home", "tpl", "live", "create"].includes(store.get("view", "")) ? store.get("view", "") as View : "home");
 // 收音中离开页面先确认(iOS 不一定弹,字幕反正已存本地)
 window.addEventListener("beforeunload", (e) => { if (state.running) { e.preventDefault(); e.returnValue = ""; } });
 // 切到后台 / 关页面前把防抖中的字幕写掉(iOS 回收后台标签页时不一定有 beforeunload)
 window.addEventListener("pagehide", flushLines);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushLines(); });
 // 给端到端测试用的观察口(模块作用域里的状态外面看不到)
-Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, setPickFor: (v) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
+Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
