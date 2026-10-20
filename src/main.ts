@@ -7,7 +7,7 @@ import { parseGlossary, glossaryText } from "./glossary";
 import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
 import { LineStore, patchTranslations, mergeLegacy } from "./linestore";
-import { store, storageFailed, setStorageWarn, idb, lsKV, noKV } from "./storage";
+import { store, storageFailed, setStorageWarn, idb, lsKV } from "./storage";
 import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { judgeSpeakers, reconcileGroupNames } from "./spk/judge";
 import { SPK_SR, SPK_DIM, spkResample, spkSegments, spkFbank, spkCluster, spkNorm, spkDot, spkSmooth } from "./spk/core";
@@ -16,12 +16,12 @@ import { fetchProgress, extractPcm, splitTimed } from "./media";
 import { readResponseStream, partialJsonString } from "./sse";
 import { asrPrompt, keywords, glossaryForLLM, SYSTEM, SCHEMA } from "./prompts";
 import { WEB_SEARCH_PER_CALL, asrCost, mtCost } from "./cost";
+import { state, cfg, lines } from "./state";
+import { $, el, flash, flashBtn, download } from "./dom";
 
 // ---------- 小工具 ----------
-const $ = (s) => document.querySelector(s);
 // 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
 setStorageWarn((kind) => flash(t(kind === "full" ? "flash.storage" : "flash.storageOff")));
-function el(tag, props = {}, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter((k) => k != null)); return e; }
 
 function showModelHints() { $("#asrModelHint").textContent = t("asrDesc." + $("#asrModel").value); $("#mtModelHint").textContent = t("mtDesc." + $("#mtModel").value); $("#ctModelHint").textContent = t("ctDesc." + $("#ctModel").value) + (getUiLang() === "zh" ? "" : " ") + t("set.ctModelHint"); }
 
@@ -94,7 +94,6 @@ function removeTemplate(id) {
   if (cfg.tpl && cfg.tpl.id === id) refreshTemplate();
 }
 function newId() { return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-const cfg = {};
 // 收音参数默认值(和设置面板的控件 id 一一对应);和默认值相同就不落盘,以后改默认值设备会跟着变
 const AUDIO_DEFAULTS = { gain: "auto", maxGain: 40, agcTarget: 14, vad: VAD, silence: 600, prefix: 300, maxTurn: 8, nr: "off", micAgc: true, micNs: false, micEc: false };
 function saveAudioSettings() {
@@ -104,52 +103,52 @@ function saveAudioSettings() {
 // 会话 = {id, name, tplId, source, target, settings, createdAt, updatedAt, count};字幕存在 IndexedDB 的 lines:<id>
 // settings 只存和默认值不同的项;没有会话时这些项存在 sessDefaults,作为新会话的初始值
 const SESSION_KEYS = ["asrModel", "mtModel", "mtEffort", ...Object.keys(AUDIO_DEFAULTS), "showSrc", "tgtSize"];
-let sessions = store.json("sessions", []), curSess = null, sessDefaults = store.json("sessDefaults", {});
-function saveSessions() { store.set("sessions", JSON.stringify(sessions)); }
-function sessSettings() { return curSess ? (curSess.settings ||= {}) : sessDefaults; }
+state.sessions = store.json("sessions", []); state.curSess = null; state.sessDefaults = store.json("sessDefaults", {});
+function saveSessions() { store.set("sessions", JSON.stringify(state.sessions)); }
+function sessSettings() { return state.curSess ? (state.curSess.settings ||= {}) : state.sessDefaults; }
 function sget(k, d) { const v = sessSettings()[k]; return v == null ? d : String(v); }
-function sset(k, v) { const o = sessSettings(); if (v == null) delete o[k]; else o[k] = String(v); if (curSess) saveSessions(); else store.set("sessDefaults", JSON.stringify(sessDefaults)); }
+function sset(k, v) { const o = sessSettings(); if (v == null) delete o[k]; else o[k] = String(v); if (state.curSess) saveSessions(); else store.set("sessDefaults", JSON.stringify(state.sessDefaults)); }
 function sessTemplate(ss) { return ss && getTemplate(ss.tplId); }
 function fmtWhen(ms) { return new Date(ms).toLocaleString(getUiLang() === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
 function newSession(tplId) {
   const tp = getTemplate(tplId) || builtins()[0], now = Date.now();
   const ss = { id: "s" + now.toString(36) + Math.random().toString(36).slice(2, 6), name: tp.name + " · " + fmtWhen(now), tplId: tp.id, source: tp.source, target: tp.target,
-    settings: { ...(curSess ? curSess.settings : sessDefaults) }, createdAt: now, updatedAt: now, count: 0 };
-  sessions.push(ss); saveSessions(); useSession(ss.id);
+    settings: { ...(state.curSess ? state.curSess.settings : state.sessDefaults) }, createdAt: now, updatedAt: now, count: 0 };
+  state.sessions.push(ss); saveSessions(); useSession(ss.id);
   return ss;
 }
 // 切换会话:收音中先停;重新读该会话的设置和字幕
 function useSession(id) {
-  const ss = sessions.find((x) => x.id === id) || null;
-  const changed = ss !== curSess;
-  if (changed && running) stop();
+  const ss = state.sessions.find((x) => x.id === id) || null;
+  const changed = ss !== state.curSess;
+  if (changed && state.running) stop();
   if (changed && fileJob.active) filePause();
   if (changed) flushLines();
-  curSess = ss; store.set("curSession", ss ? ss.id : null);
-  if (changed) { spk = null; spkPanel(false); }
+  state.curSess = ss; store.set("curSession", ss ? ss.id : null);
+  if (changed) { state.spk = null; spkPanel(false); }
   loadSettings(); refreshTemplate();
   if (changed) {
-    lines.length = 0; history.length = 0; queue.length = 0; nextId = 0;
+    lines.length = 0; history.length = 0; queue.length = 0; state.nextId = 0;
     $("#log").replaceChildren(); $("#partial").textContent = "";
-    if (curSess) restoreLines();
+    if (state.curSess) restoreLines();
     loadMemo();
   }
 }
 // 会话引用模板:模板改了(补词表等)这里重新取;语言用会话自己的
 function refreshTemplate() {
-  const tp = sessTemplate(curSess) || builtins().find((x) => x.id === "general");
-  cfg.tpl = curSess ? { ...tp, source: curSess.source, target: curSess.target } : tp;
+  const tp = sessTemplate(state.curSess) || builtins().find((x) => x.id === "general");
+  cfg.tpl = state.curSess ? { ...tp, source: state.curSess.source, target: state.curSess.target } : tp;
   cfg.glossary = parseGlossary(tp.glossary);
   $("#srcLang").value = cfg.tpl.source; $("#tgtLang").value = cfg.tpl.target;
-  $("#curTplName").textContent = curSess ? t("set.sessCur", { name: curSess.name }) + "\n" + t("set.curTpl", { name: tp.name }) : t("set.sessNone");
-  $("#langSec .two").hidden = $("#editCurTpl").hidden = !curSess;
-  if (running && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() }));
-  if (view === "live" && curSess) $("#title").textContent = curSess.name;
+  $("#curTplName").textContent = state.curSess ? t("set.sessCur", { name: state.curSess.name }) + "\n" + t("set.curTpl", { name: tp.name }) : t("set.sessNone");
+  $("#langSec .two").hidden = $("#editCurTpl").hidden = !state.curSess;
+  if (state.running && state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() }));
+  if (state.view === "live" && state.curSess) $("#title").textContent = state.curSess.name;
 }
 function deleteSession(id) {
   bumpGen(id);
-  sessions = sessions.filter((x) => x.id !== id); saveSessions(); lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
-  if (curSess && curSess.id === id) useSession(sessions.length ? [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
+  state.sessions = state.sessions.filter((x) => x.id !== id); saveSessions(); state.lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
+  if (state.curSess && state.curSess.id === id) useSession(state.sessions.length ? [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
 }
 // 旧版数据(字幕按模板存、设置全局存)升级成会话:每个有字幕的模板一个会话,当前设置带进去。只复制,不删旧数据
 function migrateToSessions() {
@@ -160,7 +159,7 @@ function migrateToSessions() {
   if (legacy.tgtSize == null && store.get("zhSize", null) != null) legacy.tgtSize = store.get("zhSize", null);
   if (legacy.tgtSize === "24") delete legacy.tgtSize;
   if (legacy.showSrc === "1") delete legacy.showSrc;
-  sessDefaults = { ...legacy }; store.set("sessDefaults", JSON.stringify(sessDefaults));
+  state.sessDefaults = { ...legacy }; store.set("sessDefaults", JSON.stringify(state.sessDefaults));
   const cur = store.get("current", null);
   for (const tp of allTemplates()) {
     const arr = store.json("lines." + tp.id, []);
@@ -168,7 +167,7 @@ function migrateToSessions() {
     const first = arr[0].t || Date.now(), last = arr[arr.length - 1].t || first;
     const ss = { id: "s" + first.toString(36) + Math.random().toString(36).slice(2, 6), name: tp.name + " · " + fmtWhen(first), tplId: tp.id, source: tp.source, target: tp.target,
       settings: { ...legacy }, createdAt: first, updatedAt: last, count: arr.length };
-    sessions.push(ss); lineStore.set(ss.id, arr);
+    state.sessions.push(ss); state.lineStore.set(ss.id, arr);
     if (tp.id === cur || !store.get("curSession", null)) store.set("curSession", ss.id);
   }
   saveSessions(); store.set("sessMigrated", "1");
@@ -227,25 +226,23 @@ function applySettings() {
 }
 
 // ---------- 字幕列表 ----------
-const lines = [];          // {id, raw, src, tgt, t, el}
 let follow = true;
-function sessKey(ss = curSess) { return ss ? ss.id : "none"; }
+function sessKey(ss = state.curSess) { return ss ? ss.id : "none"; }
 // 会话的字幕被清空、重新处理或删除时加一。在途的翻译、防抖中的保存发现代数变了就丢弃,
 // 免得旧结果按 id 写到新行上(重新处理会从 id 1 重新编号),或者把已删会话的数据写回存储
 const linesGen = new Map();
 function curGen(key) { return linesGen.get(key) || 0; }
 function bumpGen(key) { linesGen.set(key, curGen(key) + 1); }
 // 翻译记忆(见 memo.ts):按会话存,随字幕一起清空
-let memo = [];
-function loadMemo() { memo = curSess ? store.json("smemo." + curSess.id, []) : []; renderMemo(); }
-function getMemo(ss) { return ss === curSess ? memo : store.json("smemo." + ss.id, []); }
-function setMemo(next, ss = curSess) {
+function loadMemo() { state.memo = state.curSess ? store.json("smemo." + state.curSess.id, []) : []; renderMemo(); }
+function getMemo(ss) { return ss === state.curSess ? state.memo : store.json("smemo." + ss.id, []); }
+function setMemo(next, ss = state.curSess) {
   if (ss) store.set("smemo." + ss.id, next.length ? JSON.stringify(next) : null);
-  if (ss === curSess) { memo = next; renderMemo(); }
+  if (ss === state.curSess) { state.memo = next; renderMemo(); }
 }
 function renderMemo() {
-  $("#memoSum").textContent = t("rec.memo", { n: memo.length });
-  $("#memoList").replaceChildren(...(memo.length ? memo.map((m) => el("li", { textContent: m })) : [el("li", { className: "empty", textContent: t("rec.memoEmpty") })]));
+  $("#memoSum").textContent = t("rec.memo", { n: state.memo.length });
+  $("#memoList").replaceChildren(...(state.memo.length ? state.memo.map((m) => el("li", { textContent: m })) : [el("li", { className: "empty", textContent: t("rec.memoEmpty") })]));
 }
 function showEmptyHint() {
   if (isFileSess()) return;
@@ -267,11 +264,11 @@ function addLine(id, raw) {
 let saveLinesTimer = null, pendingSave = null;
 function saveLines() {
   clearTimeout(saveLinesTimer);
-  const ss = curSess, key = sessKey(ss), gen = curGen(key);
+  const ss = state.curSess, key = sessKey(ss), gen = curGen(key);
   pendingSave = () => {
     pendingSave = null;
     if (curGen(key) !== gen) return;
-    lineStore.set(key, lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}) })));
+    state.lineStore.set(key, lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}) })));
     if (ss) { ss.count = lines.length; ss.updatedAt = Date.now(); saveSessions(); }
   };
   saveLinesTimer = setTimeout(pendingSave, 500);
@@ -280,7 +277,7 @@ function saveLines() {
 function flushLines() { clearTimeout(saveLinesTimer); if (pendingSave) pendingSave(); }
 function cancelSave() { clearTimeout(saveLinesTimer); pendingSave = null; }
 function restoreLines() {
-  const saved = lineStore.get(sessKey());
+  const saved = state.lineStore.get(sessKey());
   if (!saved.length) return showEmptyHint();
   for (const s of saved) {
     const line = addLine(s.id, s.raw);
@@ -290,7 +287,7 @@ function restoreLines() {
     if (s.done) { line.done = true; renderLine(line, false); }
     else { line.el.className = "row"; line.el.querySelector(".tgt").textContent = t("line.unfinished"); }
     if (line.done && line.src) history.push(line);
-    nextId = Math.max(nextId, s.id);
+    state.nextId = Math.max(state.nextId, s.id);
   }
   $("#log").append(el("div", { className: "empty sep", textContent: t("line.sep", { n: saved.length }) }));
   cancelSave(); // 只是恢复显示,不算新的活动,别改会话的最后更新时间
@@ -345,16 +342,15 @@ $("#follow").onclick = () => setFollow(!follow);
 
 // ---------- 翻译(OpenAI Chat Completions) ----------
 const queue = [];
-let translating = false;
 const history = [];
 async function pumpTranslate() {
-  if (translating || !queue.length) return;
-  translating = true;
+  if (state.translating || !queue.length) return;
+  state.translating = true;
   const batch = queue.splice(0, 6);
-  const tplId = cfg.tpl.id, ss = curSess, key = sessKey(ss), gen = curGen(key);
+  const tplId = cfg.tpl.id, ss = state.curSess, key = sessKey(ss), gen = curGen(key);
   try {
     const ctx = history.slice(-8).map((l) => `${l.src} → ${l.tgt}`).join("\n") || "(none)";
-    const user = `Running notes:\n${memoPrompt(memo)}\n\nRecent context (already translated, reference only):\n${ctx}\n\nNew ASR segments:\n` + JSON.stringify(batch.map((l) => ({ id: l.id, asr: l.raw })));
+    const user = `Running notes:\n${memoPrompt(state.memo)}\n\nRecent context (already translated, reference only):\n${ctx}\n\nNew ASR segments:\n` + JSON.stringify(batch.map((l) => ({ id: l.id, asr: l.raw })));
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 30000);
     const mtStart = performance.now();
@@ -375,15 +371,15 @@ async function pumpTranslate() {
     lat.mtAvg = mtHist.reduce((a, b) => a + b, 0) / mtHist.length; showLat();
     const out = JSON.parse(data.choices[0].message.content), items = out.items || [];
     if (curGen(key) !== gen) return; // 翻译途中这个会话被清空、重新处理或删除了
-    if (ss !== curSess || !lines.includes(batch[0])) { // 翻译途中切走了会话:结果写回原会话,别混进当前会话的上下文
+    if (ss !== state.curSess || !lines.includes(batch[0])) { // 翻译途中切走了会话:结果写回原会话,别混进当前会话的上下文
       if (ss) setMemo(applyMemo(getMemo(ss), out.memory), ss);
-      if (ss !== curSess) { lineStore.set(key, patchTranslations(lineStore.get(key), items)); return; }
+      if (ss !== state.curSess) { state.lineStore.set(key, patchTranslations(state.lineStore.get(key), items)); return; }
       const byId = new Map(items.map((it) => [it.id, it])); // 又切回来了:页面上的行是从存储重建的,按 id 对上
       for (const l of lines) { const it = byId.get(l.id); if (it) { l.src = it.src.trim(); l.tgt = it.tgt.trim(); renderLine(l); if (l.src) history.push(l); } }
       return;
     }
     if (cfg.tpl.id !== tplId) return; // 翻译途中换了模板,这批行已经不在页面上
-    setMemo(applyMemo(memo, out.memory), ss);
+    setMemo(applyMemo(state.memo, out.memory), ss);
     const byId = new Map(items.map((it) => [it.id, it]));
     for (const l of batch) {
       const it = byId.get(l.id);
@@ -394,18 +390,17 @@ async function pumpTranslate() {
   } catch (e) {
     console.error(e);
     flash(t("flash.mt") + (e.name === "AbortError" ? t("flash.timeout") : e.message)); diag.err++;
-    if (ss === curSess && curGen(key) === gen && cfg.tpl.id === tplId) for (const l of batch) { l.tgt = ""; l.failed = true; renderLine(l); }
+    if (ss === state.curSess && curGen(key) === gen && cfg.tpl.id === tplId) for (const l of batch) { l.tgt = ""; l.failed = true; renderLine(l); }
   } finally {
-    translating = false;
+    state.translating = false;
     pumpTranslate();
   }
 }
 function apiHeaders() { return { "Content-Type": "application/json", ...(cfg.apiKey ? { Authorization: "Bearer " + cfg.apiKey } : {}) }; }
 function effort() { return cfg.mtEffort ? { reasoning_effort: cfg.mtEffort } : {}; }
-function flash(msg) { const p = $("#partial"); p.textContent = msg; p.style.color = "var(--bad)"; setTimeout(() => (p.style.color = ""), 4000); }
 
 // ---------- 识别(OpenAI Realtime 转写会话,WebSocket) ----------
-let ws = null, running = false, nextId = 0, reconnectTimer = null;
+let reconnectTimer = null;
 const partial = new Map();
 // 流式模型:不支持 turn_detection,整段音频只在一个 item 里不断吐 delta,没有 completed。
 // 所以客户端按句末标点切句;停顿 LIVE_IDLE_MS 没新 delta 就把剩下的也当一句,并 commit 一下让服务端开新 item。
@@ -433,7 +428,7 @@ function sessionConfig() {
 function emitLine(text) {
   // 只有标点/空白的碎片(比如 delta 开头单独一个「。」)丢掉
   if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
-  diag.asr++; queue.push(addLine(++nextId, text)); pumpTranslate(); showLat();
+  diag.asr++; queue.push(addLine(++state.nextId, text)); pumpTranslate(); showLat();
 }
 function liveDelta(delta) {
   liveBuf += delta; liveUncommitted = true;
@@ -455,7 +450,7 @@ function liveFlush() {
   $("#partial").textContent = "";
   emitLine(s);
   // 停顿时 commit,免得一整场都堆在同一个 item 里;commit 后的 completed 文本已经按 delta 出过了,忽略
-  if (liveUncommitted && ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: "input_audio_buffer.commit" })); liveUncommitted = false; }
+  if (liveUncommitted && state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" })); liveUncommitted = false; }
 }
 let speechSince = 0, turnEndAt = 0;
 // 实时延迟显示:翻译 = 请求往返;识别 = 云端判定一句结束(或强制断句)到出识别结果,流式模型没有句末信号所以不测
@@ -465,7 +460,7 @@ const diag = { asr: 0, noise: 0, err: 0, deltas: 0 }; // 现场排障计数
 function fmtS(ms) { return ms ? t("sec", { s: (ms / 1000).toFixed(1) }) : "—"; }
 function showLat() {
   const asr = isStreamingAsr() ? t("lat.stream") : fmtS(lat.asr);
-  const gain = running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
+  const gain = state.running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
   const item = (k, v, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
   $("#ibItems").replaceChildren(...[
     isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
@@ -498,19 +493,19 @@ function addMtCost(model, u, extra = 0) {
   cost.save(); showLat();
 }
 setInterval(() => {
-  if (!running || isStreamingAsr() || !speechSince || !ws || ws.readyState !== 1) return;
+  if (!state.running || isStreamingAsr() || !speechSince || !state.ws || state.ws.readyState !== 1) return;
   if (performance.now() - speechSince > cfg.maxTurn * 1000) {
     speechSince = performance.now();
-    ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
   }
 }, 250);
 function connect() {
   const url = cfg.apiBase.replace(/^http/, "ws") + "/realtime?intent=transcription";
   setStatus("status.connecting", "warn");
-  ws = cfg.useServer ? new WebSocket(url) : new WebSocket(url, ["realtime", "openai-insecure-api-key." + cfg.apiKey]);
+  state.ws = cfg.useServer ? new WebSocket(url) : new WebSocket(url, ["realtime", "openai-insecure-api-key." + cfg.apiKey]);
   liveUncommitted = false;
-  ws.onopen = () => { ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() })); setStatus("status.listening", "on"); showLat(); };
-  ws.onmessage = (ev) => {
+  state.ws.onopen = () => { state.ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() })); setStatus("status.listening", "on"); showLat(); };
+  state.ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     // 强制断句:持续噪声/背景音乐下 server VAD 一直认为在说话,一句话要等很久才出
     if (m.type === "input_audio_buffer.speech_started") speechSince = performance.now();
@@ -539,14 +534,14 @@ function connect() {
     }
   };
   speechSince = 0;
-  ws.onclose = (ev) => {
-    if (!running) return;
+  state.ws.onclose = (ev) => {
+    if (!state.running) return;
     setStatus("status.reconnect", "err");
     console.warn("ws closed", ev.code, ev.reason);
     clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(() => running && connect(), 1500);
+    reconnectTimer = setTimeout(() => state.running && connect(), 1500);
   };
-  ws.onerror = () => {};
+  state.ws.onerror = () => {};
 }
 // 状态:key 是 I18N 键,extra 是附加的原样文字(增益倍数等)
 let statusKey = "status.idle", statusKind = "", statusExtra = "";
@@ -558,7 +553,7 @@ let rs = null, agc = new Agc(), gainShownAt = 0;
 // 数字增益:离声源远、收音小声时放大(见 audio.ts);信息栏上的倍数每秒最多刷新一次
 function applyGain(x) {
   x = agc.apply(x, cfg.gain, cfg.maxGain, cfg.agcTarget);
-  if (x.length && running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
+  if (x.length && state.running && !micBroken && performance.now() - gainShownAt > 1000) { gainShownAt = performance.now(); showLat(); }
   return x;
 }
 // 信号格:放大后的音量分 5 格,只在格数变化时改 DOM
@@ -575,7 +570,7 @@ function onSamples(input) {
   let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
   setSignal(Math.sqrt(rms / (x.length || 1)) * 4);
   for (const pcm of rs.chunk(x)) {
-    if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
+    if (state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
   }
 }
 async function startMic() {
@@ -604,24 +599,24 @@ async function startMic() {
 async function keepAwake() {
   try { wakeLock = await navigator.wakeLock.request("screen"); } catch {}
 }
-document.addEventListener("visibilitychange", () => { if (running && document.visibilityState === "visible") { keepAwake(); actx && actx.resume(); } });
+document.addEventListener("visibilitychange", () => { if (state.running && document.visibilityState === "visible") { keepAwake(); actx && actx.resume(); } });
 
 async function start() {
   applySettings();
   if (!cfg.hasKey) { openSettings(); $("#apiKey").focus(); return; }
   if (!window.isSecureContext || !navigator.mediaDevices) { setStatus("status.https", "err"); flash(t("flash.https")); return; }
   try { await startMic(); } catch (e) { setStatus("status.noMic", "err"); flash(t("flash.mic") + e.message); return; }
-  running = true; micBroken = false; lastSampleAt = performance.now();
+  state.running = true; micBroken = false; lastSampleAt = performance.now();
   $("#go").textContent = t("live.stop"); $("#go").classList.add("stop");
   keepAwake();
   connect();
 }
 function stop() {
-  running = false;
+  state.running = false;
   speechSince = 0;
   clearTimeout(reconnectTimer);
   if (liveBuf) liveFlush();
-  if (ws) { try { ws.close(); } catch {} ws = null; }
+  if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
   if (stream) stream.getTracks().forEach((x) => x.stop());
   if (actx) actx.close();
   stream = actx = tap = rs = null; agc = new Agc();
@@ -630,10 +625,10 @@ function stop() {
   setSignal(0); showLat();
   setStatus("status.stopped");
 }
-$("#go").onclick = () => (isFileSess() ? (fileJob.active ? filePause() : fileStart()) : running ? stop() : start());
+$("#go").onclick = () => (isFileSess() ? (fileJob.active ? filePause() : fileStart()) : state.running ? stop() : start());
 // iOS:音频上下文偶尔起不来(suspended),点一下屏幕任意处再试
 document.addEventListener("touchend", () => {
-  if (!running) return;
+  if (!state.running) return;
   if (micBroken) restartMic(); // 在点击里重建,iOS 才允许音频上下文启动
   else if (actx && actx.state !== "running") actx.resume().catch(() => {});
 }, { passive: true });
@@ -649,7 +644,7 @@ function micProblem() {
   return "";
 }
 setInterval(() => {
-  if (!running || micRestarting || document.visibilityState !== "visible") return;
+  if (!state.running || micRestarting || document.visibilityState !== "visible") return;
   const why = micProblem();
   if (!why) { if (micBroken) { micBroken = false; setStatus("status.listening", "on"); } return; }
   micBroken = true;
@@ -672,13 +667,12 @@ async function restartMic() {
 }
 
 // ---------- 视图切换 ----------
-let view = "home";
 function show(v) {
-  if (v === "live" && !curSess) v = "home";
-  view = v; document.body.dataset.view = v;
+  if (v === "live" && !state.curSess) v = "home";
+  state.view = v; document.body.dataset.view = v;
   for (const [id, name] of [["#viewHome", "home"], ["#viewTpl", "tpl"], ["#viewLive", "live"], ["#viewCreate", "create"]]) $(id).hidden = v !== name;
   $("#toHome").hidden = v === "home"; $("#toTpl").hidden = v === "tpl";
-  $("#title").textContent = v === "live" ? curSess.name : v === "create" ? t(creator.editId ? "create.titleEdit" : "create.titleNew") : v === "tpl" ? t("tpl.title") : t("app");
+  $("#title").textContent = v === "live" ? state.curSess.name : v === "create" ? t(creator.editId ? "create.titleEdit" : "create.titleNew") : v === "tpl" ? t("tpl.title") : t("app");
   document.title = $("#title").textContent;
   if (v === "home") renderSessions();
   if (v === "tpl") renderHome();
@@ -698,16 +692,15 @@ $("#newSession").onclick = () => show("tpl");
 // 实测 4 倍速与 1 倍速识别结果一致,8 倍速开始丢字
 const FILE_SPEED = 4, MEDIA_BASE = new Date(2000, 0, 1).getTime();
 const fileJob = { active: false, phase: "idle", sid: null, pcm: null, pos: 0, total: 0, t0: 0, from: 0, ws: null, items: {}, pending: 0, lastEnd: 0, speakFrom: null, lastEvt: 0, err: "", extractPct: 0 };
-function isFileSess() { return !!(curSess && curSess.kind === "file"); }
+function isFileSess() { return !!(state.curSess && state.curSess.kind === "file"); }
 function setLineTime(line, s, e) {
   line.ms = s; line.endMs = e; line.t = new Date(MEDIA_BASE + e);
   if (!line.el.querySelector(".tm")) line.el.prepend(el("div", { className: "tm", textContent: fmtClock(s) }));
 }
-let lineStore = new LineStore(noKV, storageFailed);
 async function loadLineStore() {
   for (const [kv, name] of [[idb, "IndexedDB"], [lsKV, "localStorage"]]) {
     const st = new LineStore(kv, storageFailed);
-    try { await st.load(); lineStore = st; break; } catch (e) { console.warn(name + " unavailable for subtitles", e); }
+    try { await st.load(); state.lineStore = st; break; } catch (e) { console.warn(name + " unavailable for subtitles", e); }
   }
   // 旧版存在 localStorage 的 slines.<id>:合并进新存储,写成功后再删,腾出空间。
   // 迁移后又用旧版记过字幕的话,两边都有,旧版那部分接在后面
@@ -716,17 +709,17 @@ async function loadLineStore() {
     for (const k of Object.keys(localStorage).filter((k) => k.startsWith("jls.slines."))) {
       const id = k.slice("jls.slines.".length);
       let arr = null; try { arr = JSON.parse(localStorage.getItem(k)); } catch {}
-      const cur = lineStore.get(id), merged = Array.isArray(arr) ? mergeLegacy(cur, arr) : cur;
+      const cur = state.lineStore.get(id), merged = Array.isArray(arr) ? mergeLegacy(cur, arr) : cur;
       if (merged.length !== cur.length) {
-        if (!(await lineStore.set(id, merged))) continue;
-        const ss = sessions.find((x) => x.id === id); if (ss) { ss.count = merged.length; changed = true; }
+        if (!(await state.lineStore.set(id, merged))) continue;
+        const ss = state.sessions.find((x) => x.id === id); if (ss) { ss.count = merged.length; changed = true; }
       }
       localStorage.removeItem(k);
     }
     if (changed) saveSessions();
   } catch (e) { console.warn("legacy subtitle migration skipped", e); }
 }
-let mediaBlob = null, mediaUrl = null, pickFor = null;
+let mediaUrl = null, pickFor = null;
 // 先直接存 File;Safari 无痕模式等不让存 Blob 时,300 MB 以内改存 ArrayBuffer
 async function storeMedia(id, f) {
   try { await idb.put(id, f); return true; } catch {}
@@ -738,17 +731,17 @@ async function loadMedia(id) {
   return v && v.buf ? new File([v.buf], v.name, { type: v.type }) : v || null;
 }
 function pickMedia(tplId) { pickFor = { tplId }; $("#mediaFile").value = ""; $("#mediaFile").click(); }
-$("#reattach").onclick = () => { pickFor = { reattach: curSess.id }; $("#mediaFile").value = ""; $("#mediaFile").click(); };
+$("#reattach").onclick = () => { pickFor = { reattach: state.curSess.id }; $("#mediaFile").value = ""; $("#mediaFile").click(); };
 $("#mediaFile").onchange = async () => {
   const f = $("#mediaFile").files[0]; if (!f || !pickFor) return;
   let ss;
-  if (pickFor.reattach) ss = sessions.find((x) => x.id === pickFor.reattach);
+  if (pickFor.reattach) ss = state.sessions.find((x) => x.id === pickFor.reattach);
   else {
     ss = newSession(pickFor.tplId);
     Object.assign(ss, { kind: "file", name: f.name.replace(/\.[^.]+$/, ""), file: { name: f.name, size: f.size, type: f.type, duration: 0 }, progress: 0, done: false });
     saveSessions();
   }
-  pickFor = null; mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
+  pickFor = null; state.mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
   ss.file.stored = await storeMedia(ss.id, f);
   if (!ss.file.stored) flash(t("file.noStore"));
   saveSessions(); useSession(ss.id); show("live");
@@ -758,16 +751,16 @@ async function setupFileView() {
   const on = isFileSess();
   document.body.classList.toggle("filemode", on);
   $("#playerBox").hidden = $("#fileBar").hidden = !on;
-  if (!on) { $("#go").textContent = t(running ? "live.stop" : "live.start"); return; }
-  const ss = curSess;
-  if (!mediaBlob || fileJob.sid !== ss.id) { mediaBlob = await loadMedia(ss.id) || (mediaBlob && mediaBlob.name === ss.file.name && fileJob.sid == null ? mediaBlob : null); fileJob.sid = ss.id; fileJob.pcm = null; }
-  if (curSess !== ss) return;
+  if (!on) { $("#go").textContent = t(state.running ? "live.stop" : "live.start"); return; }
+  const ss = state.curSess;
+  if (!state.mediaBlob || fileJob.sid !== ss.id) { state.mediaBlob = await loadMedia(ss.id) || (state.mediaBlob && state.mediaBlob.name === ss.file.name && fileJob.sid == null ? state.mediaBlob : null); fileJob.sid = ss.id; fileJob.pcm = null; }
+  if (state.curSess !== ss) return;
   const p = $("#player");
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
-  mediaUrl = mediaBlob ? URL.createObjectURL(mediaBlob) : null;
+  mediaUrl = state.mediaBlob ? URL.createObjectURL(state.mediaBlob) : null;
   if (mediaUrl) p.src = mediaUrl; else p.removeAttribute("src");
   $("#playerBox").classList.toggle("audio", /^audio\//.test(ss.file.type) || /\.(mp3|m4a|wav|flac|ogg|opus|aac)$/i.test(ss.file.name));
-  $("#playerBox").hidden = !mediaBlob;
+  $("#playerBox").hidden = !state.mediaBlob;
   $("#reattach").hidden = true; // 缺文件时主按钮就是「重新选择原文件」
   p.onloadedmetadata = () => { if (isFinite(p.duration) && !ss.file.duration) { ss.file.duration = p.duration * 1000; saveSessions(); fileProgress(); } };
   fileJob.phase = fileJob.active ? fileJob.phase : ss.done ? "done" : ss.progress ? "paused" : "idle";
@@ -779,12 +772,12 @@ $("#player").ontimeupdate = () => {
   let cur = null;
   for (const l of lines) { if (l.ms == null) continue; if (l.ms <= ms + 150 && ms <= l.endMs + 400) cur = l; if (l.ms > ms + 150) break; }
   $("#ovl .ot").textContent = cur && cur.tgt ? spkPrefix(cur) + cur.tgt : ""; $("#ovl .os").textContent = cur ? cur.src : "";
-  if (spkStopAt != null && ms >= spkStopAt) { spkStopAt = null; $("#player").pause(); }
+  if (state.spkStopAt != null && ms >= state.spkStopAt) { state.spkStopAt = null; $("#player").pause(); }
   const prev = $("#log .row.active");
   if (cur && prev !== cur.el) { if (prev) prev.classList.remove("active"); cur.el.classList.add("active"); if (!$("#player").paused) cur.el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
   else if (!cur && prev) prev.classList.remove("active");
 };
-function seekTo(ms) { const p = $("#player"); if (!p.src) return; spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
+function seekTo(ms) { const p = $("#player"); if (!p.src) return; state.spkStopAt = null; p.currentTime = ms / 1000; p.play().catch(() => {}); }
 // extractPcm 的进度写进 fileJob,和文件翻译进度条共用
 const pcmCb = {
   onPhase(ph) { fileJob.phase = ph; if (ph === "loading") fileJob.loadPct = 0; else fileJob.extractPct = 0; fileProgress(); },
@@ -797,24 +790,24 @@ function fileConfig() {
   const c = sessionConfig(); [cfg.asrModel, cfg.silence] = keep; return c;
 }
 async function fileStart() {
-  const ss = curSess;
+  const ss = state.curSess;
   applySettings();
   if (!cfg.hasKey) { openSettings(); $("#apiKey").focus(); return; }
-  if (!mediaBlob) { $("#reattach").click(); return; }
+  if (!state.mediaBlob) { $("#reattach").click(); return; }
   if (ss.done && !$("#go").dataset.armed) { // 重新处理会清空字幕:先确认
     $("#go").dataset.armed = "1"; $("#go").textContent = t("file.redoSure");
     setTimeout(() => { delete $("#go").dataset.armed; setGoFile(); }, 3000); return;
   }
   delete $("#go").dataset.armed;
   if (ss.done) { // 重新处理:清空字幕从头来
-    cancelSave(); bumpGen(sessKey()); lines.length = 0; history.length = 0; queue.length = 0; nextId = 0;
-    $("#log").replaceChildren(); lineStore.set(sessKey(), null); ss.progress = 0; ss.done = false; ss.count = 0; saveSessions(); setMemo([]);
+    cancelSave(); bumpGen(sessKey()); lines.length = 0; history.length = 0; queue.length = 0; state.nextId = 0;
+    $("#log").replaceChildren(); state.lineStore.set(sessKey(), null); ss.progress = 0; ss.done = false; ss.count = 0; saveSessions(); setMemo([]);
   }
   fileJob.active = true; fileJob.err = ""; setGoFile(); setStatus("status.processing", "on"); keepAwake();
   try {
-    if (!fileJob.pcm) fileJob.pcm = await extractPcm(mediaBlob, pcmCb);
+    if (!fileJob.pcm) fileJob.pcm = await extractPcm(state.mediaBlob, pcmCb);
   } catch (e) { fileJob.active = false; fileJob.phase = "error"; fileJob.err = e.message; setGoFile(); fileProgress(); setStatus("status.paused", "err"); return; }
-  if (!fileJob.active || curSess !== ss) return;
+  if (!fileJob.active || state.curSess !== ss) return;
   fileJob.total = fileJob.pcm.length / 24; ss.file.duration = fileJob.total; saveSessions();
   fileJob.from = fileJob.pos = Math.min(ss.progress || 0, fileJob.total); fileJob.items = {}; fileJob.pending = 0; fileJob.forcedAt = []; fileJob.commitEnd = null; fileJob.lastEnd = fileJob.from; fileJob.speakFrom = null; fileJob.phase = "run";
   fileConnect(ss);
@@ -842,7 +835,7 @@ function fileConnect(ss) {
       const s0 = it.s ?? J.lastEnd, e0 = Math.max(s0 + 300, it.e ?? J.pos);
       J.lastEnd = e0; $("#partial").textContent = "";
       emitTimed((m.transcript || "").trim(), s0, e0);
-      if (curSess === ss) { ss.progress = Math.max(ss.progress || 0, e0); saveSessions(); }
+      if (state.curSess === ss) { ss.progress = Math.max(ss.progress || 0, e0); saveSessions(); }
     } else if (m.type === "error") {
       const msg = (m.error && (m.error.message || m.error.code)) || "?";
       console.error(m); diag.err++; showLat();
@@ -868,7 +861,7 @@ function filePump(ws2, ss) {
     if (J.pos >= J.total) {
       if (J.phase === "run") { J.phase = "flush"; if (J.speakFrom != null) { ws2.send(JSON.stringify({ type: "input_audio_buffer.commit" })); J.forcedAt.push(J.pos); } J.flushAt = performance.now(); }
       const quiet = performance.now() - J.lastEvt > 4000;
-      if ((J.pending === 0 && quiet || performance.now() - J.flushAt > 60000) && !queue.length && !translating) return fileFinish(ss);
+      if ((J.pending === 0 && quiet || performance.now() - J.flushAt > 60000) && !queue.length && !state.translating) return fileFinish(ss);
     }
     fileProgress();
     setTimeout(tick, CHUNK_MS);
@@ -879,7 +872,7 @@ function emitTimed(text, s, e) {
   if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
   // 一段里有几句就拆开,时间按字数比例分
   for (const p of splitTimed(text, s, e, ["ja", "zh"].includes(cfg.tpl.source))) {
-    diag.asr++; const line = addLine(++nextId, p.text); setLineTime(line, Math.round(p.s), Math.round(p.e)); queue.push(line);
+    diag.asr++; const line = addLine(++state.nextId, p.text); setLineTime(line, Math.round(p.s), Math.round(p.e)); queue.push(line);
     const j = lines.findIndex((l) => l !== line && l.ms != null && l.ms > line.ms);
     if (j >= 0) { lines.splice(lines.indexOf(line), 1); lines.splice(j, 0, line); lines[j + 1].el.before(line.el); }
   }
@@ -902,15 +895,15 @@ function filePause(isErr) {
 }
 function setGoFile() {
   if (!isFileSess()) return;
-  const ss = curSess, g = $("#go");
+  const ss = state.curSess, g = $("#go");
   if (g.dataset.armed) return;
-  g.textContent = t(fileJob.active ? "file.pause" : !mediaBlob ? "file.reattach" : ss.done ? "file.redo" : ss.progress ? "file.resume" : "file.start");
+  g.textContent = t(fileJob.active ? "file.pause" : !state.mediaBlob ? "file.reattach" : ss.done ? "file.redo" : ss.progress ? "file.resume" : "file.start");
   g.classList.toggle("stop", fileJob.active);
   g.classList.toggle("redo", !fileJob.active && !!ss.done);
 }
 function fileProgress() {
   if (!isFileSess()) return;
-  const ss = curSess, J = fileJob, total = J.total || (ss.file && ss.file.duration) || 0;
+  const ss = state.curSess, J = fileJob, total = J.total || (ss.file && ss.file.duration) || 0;
   const done = lines.filter((l) => l.done).length, n = lines.length, pos = J.active ? J.pos : ss.progress || 0;
   let pct = total ? pos / total : 0, txt;
   const fill = $("#pfill"); fill.classList.toggle("busy", J.phase === "flush");
@@ -921,7 +914,7 @@ function fileProgress() {
   else if ((J.phase === "done" || ss.done) && spkRunning() && spkNow.msg) { txt = t("file.spk", { m: spkNow.msg }); pct = spkNow.p == null ? 1 : spkNow.p; fill.classList.toggle("busy", spkNow.p == null); }
   else if (J.phase === "done" || ss.done) { txt = t("file.done", { total: fmtClock(total), n }); pct = 1; }
   else if (J.phase === "error") txt = t("file.err", { m: J.err || "?" });
-  else if (!mediaBlob) txt = t("file.missing");
+  else if (!state.mediaBlob) txt = t("file.missing");
   else if (ss.progress) txt = t("file.paused", { pos: fmtClock(pos), total: fmtClock(total), n });
   else txt = t("file.idle", { total: total ? fmtClock(total) : "—", speed: FILE_SPEED });
   fill.style.width = Math.round(Math.min(1, pct) * 1000) / 10 + "%";
@@ -930,8 +923,8 @@ function fileProgress() {
   setGoFile();
 }
 const makeSubs = (kind) => subtitleFile(kind, lines, $("#showSrc").checked, spkPrefix);
-$("#expSrt").onclick = () => download(fileName(curSess.name) + ".srt", makeSubs("srt"), "application/x-subrip");
-$("#expVtt").onclick = () => download(fileName(curSess.name) + ".vtt", makeSubs("vtt"), "text/vtt");
+$("#expSrt").onclick = () => download(fileName(state.curSess.name) + ".srt", makeSubs("srt"), "application/x-subrip");
+$("#expVtt").onclick = () => download(fileName(state.curSess.name) + ".vtt", makeSubs("vtt"), "text/vtt");
 
 
 // ---------- 说话人识别(实验功能,全部在本机计算,不调用 API) ----------
@@ -939,7 +932,7 @@ $("#expVtt").onclick = () => download(fileName(curSess.name) + ".vtt", makeSubs(
 // → 每句字幕按重叠时长投票,最多的一组占比达到阈值才标名字。实测(3 人快速接话的电台节目):片段 93%,按句约 75%,约一半的句子有标签
 // 声纹存在 IndexedDB「spk:<会话 id>」,改阈值、改名字只重新分组/投票,不用重算
 const SPK_COLORS = ["#e8590c", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e64980", "#5c7cfa"];
-let spk = null, spkBusy = false, spkStopAt = null, spkModelP = null;
+let spkBusy = false, spkModelP = null;
 // 一句字幕里声纹占比达到这个比例才算声纹确定(MyGO 实测的最优值),不确定的交给 GPT 判定
 const SPK_SHARE = 0.85;
 // 分组阈值(余弦距离)、投票时句子两端放宽的秒数、没有重叠片段时找最近片段的最大距离:
@@ -947,7 +940,7 @@ const SPK_SHARE = 0.85;
 const SPK_DIST = 0.5, SPK_PAD = 0.5, SPK_NEAR = 2;
 function spkOn() { return sget("spkOn", "0") === "1"; }
 function spkPrefix(l) { return l.spk && spkOn() ? l.spk + (CJK.test(l.tgt || l.src || "") ? "：" : ": ") : ""; }
-function spkName(c) { return (spk.names[c] || "").trim() || (spk.llm && spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
+function spkName(c) { return (state.spk.names[c] || "").trim() || (state.spk.llm && state.spk.llm.names[c]) || t("spk.n", { n: c + 1 }); }
 function paintSpk(l) {
   const tm = l.el.querySelector(".tm"); if (!tm) return;
   let w = tm.querySelector(".who");
@@ -970,20 +963,20 @@ async function spkEmbed(model, x) {
   return spkNorm(r[model.outputNames[0]].data);
 }
 async function spkLoad() {
-  if (!curSess) return null;
-  if (spk && spk.sid === curSess.id) return spk;
-  const sid = curSess.id, rec = await idb.get("spk:" + sid).catch(() => null);
-  if (!curSess || curSess.id !== sid) return null;
-  spk = rec ? { ...rec, sid } : null;
-  if (spk) spkRecluster(false, true);
-  return spk;
+  if (!state.curSess) return null;
+  if (state.spk && state.spk.sid === state.curSess.id) return state.spk;
+  const sid = state.curSess.id, rec = await idb.get("spk:" + sid).catch(() => null);
+  if (!state.curSess || state.curSess.id !== sid) return null;
+  state.spk = rec ? { ...rec, sid } : null;
+  if (state.spk) spkRecluster(false, true);
+  return state.spk;
 }
-function spkSave() { if (spk) idb.put("spk:" + spk.sid, { segs: spk.segs, emb: spk.emb, n: spk.n, cents: spk.cents, names: spk.names, llm: spk.llm || null }).catch(() => {}); }
+function spkSave() { if (state.spk) idb.put("spk:" + state.spk.sid, { segs: state.spk.segs, emb: state.spk.emb, n: state.spk.n, cents: state.spk.cents, names: state.spk.names, llm: state.spk.llm || null }).catch(() => {}); }
 async function spkAnalyze() {
-  const ss = curSess;
+  const ss = state.curSess;
   if (!ss || spkBusy) return;
   if (fileJob.active) return spkMsg(t("spk.busy"));
-  if (!mediaBlob) return spkMsg(t("spk.needMedia"));
+  if (!state.mediaBlob) return spkMsg(t("spk.needMedia"));
   spkBusy = true; renderSpk(); spkBar(0);
   try {
     spkMsg(t("spk.loadModel", { pct: 0 }));
@@ -991,27 +984,27 @@ async function spkAnalyze() {
     if (!fileJob.pcm) {
       spkBar(null); spkMsg(t("spk.extract"));
       const keep = fileJob.phase;
-      try { fileJob.pcm = await extractPcm(mediaBlob, pcmCb); } finally { fileJob.phase = keep; fileProgress(); }
+      try { fileJob.pcm = await extractPcm(state.mediaBlob, pcmCb); } finally { fileJob.phase = keep; fileProgress(); }
     }
-    if (curSess !== ss) return;
+    if (state.curSess !== ss) return;
     const pcm = fileJob.pcm, segs = spkSegments(pcm, 24000), n = segs.length, emb = new Float32Array(n * SPK_DIM);
     // 模型在主线程里跑,await 不会真的把控制权还给浏览器:每 40 ms 主动让一次,页面才能响应、进度条才会刷新
     let yieldAt = performance.now();
     for (let i = 0; i < n; i++) {
-      if (curSess !== ss) return;
+      if (state.curSess !== ss) return;
       emb.set(await spkEmbed(model, spkResample(pcm, Math.round(segs[i][0] * 24000), Math.round(segs[i][1] * 24000))), i * SPK_DIM);
       if (performance.now() - yieldAt > 40) { spkBar(i / n); spkMsg(t("spk.embed", { i, n })); await new Promise((r) => setTimeout(r, 0)); yieldAt = performance.now(); }
     }
-    const old = spk && spk.sid === ss.id ? spk : null;
-    spk = { sid: ss.id, segs: Float32Array.from(segs.flat()), emb, n, cents: old ? old.cents : null, names: old ? old.names : [] };
+    const old = state.spk && state.spk.sid === ss.id ? state.spk : null;
+    state.spk = { sid: ss.id, segs: Float32Array.from(segs.flat()), emb, n, cents: old ? old.cents : null, names: old ? old.names : [] };
     spkRecluster(true); spkSave();
   } catch (e) { console.error(e); spkMsg(t("spk.err", { m: e.message || String(e) })); }
-  finally { spkBusy = false; spkBar(null); if (curSess === ss) renderSpk(); }
+  finally { spkBusy = false; spkBar(null); if (state.curSess === ss) renderSpk(); }
 }
 // 分组:长片段聚类(最多取最长的 600 段),太小的组(少于 3 段且不到 3%)并进最近的组;组按总时长排序。
 // 重新分组后,和旧的组声纹很像的沿用旧名字
 function spkRecluster(inherit, keepLlm) {
-  const { n, segs, emb } = spk, vec = (i) => emb.subarray(i * SPK_DIM, (i + 1) * SPK_DIM), dur = (i) => segs[2 * i + 1] - segs[2 * i];
+  const { n, segs, emb } = state.spk, vec = (i) => emb.subarray(i * SPK_DIM, (i + 1) * SPK_DIM), dur = (i) => segs[2 * i + 1] - segs[2 * i];
   let long = []; for (let i = 0; i < n; i++) if (dur(i) >= 1.5) long.push(i);
   if (long.length > 600) long = long.sort((a, b) => dur(b) - dur(a)).slice(0, 600);
   if (long.length < 2) for (let i = 0; i < n; i++) if (!long.includes(i)) long.push(i);
@@ -1021,27 +1014,27 @@ function spkRecluster(inherit, keepLlm) {
   if (!keep.length) keep = [[...groups.values()].sort((a, b) => b.length - a.length)[0]];
   const mean = (idx) => { const m = new Float32Array(SPK_DIM); for (const i of idx) { const v = vec(i); for (let d = 0; d < SPK_DIM; d++) m[d] += v[d]; } return spkNorm(m); };
   let cents = keep.map(mean);
-  const assign = () => { spk.lab = new Int16Array(n); spk.sim = new Float32Array(n); for (let i = 0; i < n; i++) { let b = 0, bs = -2; const v = vec(i); cents.forEach((c, k) => { const s2 = spkDot(v, c); if (s2 > bs) { bs = s2; b = k; } }); spk.lab[i] = b; spk.sim[i] = bs; } };
+  const assign = () => { state.spk.lab = new Int16Array(n); state.spk.sim = new Float32Array(n); for (let i = 0; i < n; i++) { let b = 0, bs = -2; const v = vec(i); cents.forEach((c, k) => { const s2 = spkDot(v, c); if (s2 > bs) { bs = s2; b = k; } }); state.spk.lab[i] = b; state.spk.sim[i] = bs; } };
   assign();
-  const tot = cents.map((_, k) => { let s2 = 0; for (let i = 0; i < n; i++) if (spk.lab[i] === k) s2 += dur(i); return s2; });
+  const tot = cents.map((_, k) => { let s2 = 0; for (let i = 0; i < n; i++) if (state.spk.lab[i] === k) s2 += dur(i); return s2; });
   const order = cents.map((_, k) => k).sort((a, b) => tot[b] - tot[a]);
   cents = order.map((k) => cents[k]); assign();
   // 前后文平滑:短片段结合前后片段一起定组(MyGO 三集实测按时长准确率 +0~2 个百分点)
   { const K = cents.length, sims = new Float32Array(n * K);
     for (let i = 0; i < n; i++) { const v = vec(i); cents.forEach((c, k) => { sims[i * K + k] = spkDot(v, c); }); }
-    spk.lab = spkSmooth(segs, sims, K); for (let i = 0; i < n; i++) spk.sim[i] = sims[i * K + spk.lab[i]]; }
-  const oldC = spk.cents ? Array.from({ length: spk.cents.length / SPK_DIM }, (_, k) => spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)) : [], oldN = spk.names || [];
+    state.spk.lab = spkSmooth(segs, sims, K); for (let i = 0; i < n; i++) state.spk.sim[i] = sims[i * K + state.spk.lab[i]]; }
+  const oldC = state.spk.cents ? Array.from({ length: state.spk.cents.length / SPK_DIM }, (_, k) => state.spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)) : [], oldN = state.spk.names || [];
   if (inherit !== false) { // 新旧两组互为最像、且余弦 ≥ 0.8 才沿用名字,避免名字沿着相近的组一路传下去
     const best = (v, arr) => { let b = -1, bs = 0.8; arr.forEach((o, k) => { const s2 = spkDot(v, o); if (s2 >= bs) { bs = s2; b = k; } }); return b; };
-    spk.names = cents.map((c, k) => { const o = best(c, oldC); return o >= 0 && best(oldC[o], cents) === k ? oldN[o] || "" : ""; });
+    state.spk.names = cents.map((c, k) => { const o = best(c, oldC); return o >= 0 && best(oldC[o], cents) === k ? oldN[o] || "" : ""; });
   }
-  const same = spk.cents && spk.cents.length === cents.length * SPK_DIM && cents.every((c, k) => spkDot(c, spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)) > 0.999);
-  if (!keepLlm && !same) spk.llm = null; // 分组变了,之前的 LLM 判定对不上组号,作废
-  spk.cents = new Float32Array(cents.length * SPK_DIM); cents.forEach((c, k) => spk.cents.set(c, k * SPK_DIM));
-  spk.groups = cents.map((_, k) => {
+  const same = state.spk.cents && state.spk.cents.length === cents.length * SPK_DIM && cents.every((c, k) => spkDot(c, state.spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)) > 0.999);
+  if (!keepLlm && !same) state.spk.llm = null; // 分组变了,之前的 LLM 判定对不上组号,作废
+  state.spk.cents = new Float32Array(cents.length * SPK_DIM); cents.forEach((c, k) => state.spk.cents.set(c, k * SPK_DIM));
+  state.spk.groups = cents.map((_, k) => {
     let d = 0, cnt = 0, best = -1, bs = -2;
-    for (let i = 0; i < n; i++) if (spk.lab[i] === k) { d += dur(i); cnt++; if (dur(i) >= 1.5 && spk.sim[i] > bs) { bs = spk.sim[i]; best = i; } }
-    if (best < 0) for (let i = 0; i < n; i++) if (spk.lab[i] === k && (best < 0 || dur(i) > dur(best))) best = i;
+    for (let i = 0; i < n; i++) if (state.spk.lab[i] === k) { d += dur(i); cnt++; if (dur(i) >= 1.5 && state.spk.sim[i] > bs) { bs = state.spk.sim[i]; best = i; } }
+    if (best < 0) for (let i = 0; i < n; i++) if (state.spk.lab[i] === k && (best < 0 || dur(i) > dur(best))) best = i;
     return { dur: d, n: cnt, sample: best };
   });
   spkVote();
@@ -1050,10 +1043,10 @@ function spkRecluster(inherit, keepLlm) {
 // 按组的候选分布记在 l.spkV(给 LLM 判定用)。有 LLM 判定且开着时:声纹不确定的句子用 LLM 的结论;
 // 声纹确定的句子只在 LLM 有明确证据(自我介绍、被点名后回答)时改判
 function spkVote() {
-  if (!spk) return;
-  const share = SPK_SHARE, { n, segs } = spk, color = {};
-  spk.groups.forEach((_, k) => { const nm = spkName(k); if (!(nm in color)) color[nm] = k; });
-  const llm = spk.llm ? new Map(spk.llm.lines.map(([id, who, basis]) => [id, { who, basis }])) : null;
+  if (!state.spk) return;
+  const share = SPK_SHARE, { n, segs } = state.spk, color = {};
+  state.spk.groups.forEach((_, k) => { const nm = spkName(k); if (!(nm in color)) color[nm] = k; });
+  const llm = state.spk.llm ? new Map(state.spk.llm.lines.map(([id, who, basis]) => [id, { who, basis }])) : null;
   const llmName = (who) => (/^G\d+$/.test(who) ? spkName(Number(who.slice(1)) - 1) : who);
   let tagged = 0, timed = 0;
   for (const l of lines) {
@@ -1063,37 +1056,37 @@ function spkVote() {
     for (let i = 0; i < n; i++) {
       const ov = Math.min(e, segs[2 * i + 1]) - Math.max(s, segs[2 * i]);
       if (ov <= 0) continue;
-      const w = ov * (segs[2 * i + 1] - segs[2 * i] >= 1.5 ? 1 : 0.5), nm = spkName(spk.lab[i]);
-      vote[nm] = (vote[nm] || 0) + w; gv[spk.lab[i]] = (gv[spk.lab[i]] || 0) + w; sum += w;
+      const w = ov * (segs[2 * i + 1] - segs[2 * i] >= 1.5 ? 1 : 0.5), nm = spkName(state.spk.lab[i]);
+      vote[nm] = (vote[nm] || 0) + w; gv[state.spk.lab[i]] = (gv[state.spk.lab[i]] || 0) + w; sum += w;
     }
     l.spkV = Object.entries(gv).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, w]) => [Number(k), w / sum]); delete l.spkNear;
     // 句子的时间戳有时偏短、落在两段声音之间:取前后 SPK_NEAR 秒内最近的片段作参考,但不算声纹确定,交给 GPT 判断
-    if (!sum) { let bi = -1, bg = Infinity; for (let i = 0; i < n; i++) { const g = Math.max(segs[2 * i] - e, s - segs[2 * i + 1]); if (g < bg) { bg = g; bi = i; } } if (bi >= 0 && bg <= SPK_NEAR) { l.spkV = [[spk.lab[bi], 1]]; l.spkNear = Math.max(0, bg); } }
+    if (!sum) { let bi = -1, bg = Infinity; for (let i = 0; i < n; i++) { const g = Math.max(segs[2 * i] - e, s - segs[2 * i + 1]); if (g < bg) { bg = g; bi = i; } } if (bi >= 0 && bg <= SPK_NEAR) { l.spkV = [[state.spk.lab[bi], 1]]; l.spkNear = Math.max(0, bg); } }
     const top = Object.entries(vote).sort((a, b) => b[1] - a[1])[0], sure = top && top[1] / sum >= share - 1e-9;
     delete l.spkBy;
     if (!top) delete l.spk; else if (sure) l.spk = top[0]; else l.spk = "";
     const j = llm && llm.get(l.id);
     if (j && j.who) {
       const nm = llmName(j.who);
-      const unnamed = sure && /^G\d+$/.test(j.who) === false && spk.groups.some((_, k) => spkName(k) === l.spk && spkName(k) === t("spk.n", { n: k + 1 }));
+      const unnamed = sure && /^G\d+$/.test(j.who) === false && state.spk.groups.some((_, k) => spkName(k) === l.spk && spkName(k) === t("spk.n", { n: k + 1 }));
       if (nm !== l.spk && (!sure || unnamed || j.basis === "self_intro" || j.basis === "addressed")) { l.spk = nm; l.spkBy = j.basis; }
     }
     if (l.spk) { if (!(l.spk in color)) color[l.spk] = Object.keys(color).length; l.spc = color[l.spk]; tagged++; } else delete l.spc;
     paintSpk(l);
   }
-  spk.tagged = tagged; spk.timed = timed;
+  state.spk.tagged = tagged; state.spk.timed = timed;
   saveLines();
 }
 // 模板声纹库:{ 名字: { v: base64(192 维 float32), d: 累计秒数 } }。确认过组名后存进模板,之后同一模板的文件自动对照
 const f32b64 = (v) => btoa(String.fromCharCode(...new Uint8Array(Float32Array.from(v).buffer)));
 const b64f32 = (s) => new Float32Array(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer);
-function spkGroupVecs() { return spk.groups.map((_, k) => spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)); } // 各组质心
+function spkGroupVecs() { return state.spk.groups.map((_, k) => state.spk.cents.subarray(k * SPK_DIM, (k + 1) * SPK_DIM)); } // 各组质心
 function spkSaveVoices() {
-  const tp = getTemplate(cfg.tpl.id); if (!tp || !spk) return;
+  const tp = getTemplate(cfg.tpl.id); if (!tp || !state.spk) return;
   const lib = { ...(tp.voices || {}) }, acc = {}, G = spkGroupVecs();
-  for (let k = 0; k < spk.groups.length; k++) {
+  for (let k = 0; k < state.spk.groups.length; k++) {
     const nm = spkName(k); if (nm === t("spk.n", { n: k + 1 })) continue; // 没认出名字的组不存
-    const a = (acc[nm] ||= { v: new Float32Array(SPK_DIM), d: 0 }), d = spk.groups[k].dur;
+    const a = (acc[nm] ||= { v: new Float32Array(SPK_DIM), d: 0 }), d = state.spk.groups[k].dur;
     for (let i = 0; i < SPK_DIM; i++) a.v[i] += G[k][i] * d; a.d += d;
   }
   for (const [nm, a] of Object.entries(acc)) { // 和库里同名的按时长加权合并
@@ -1108,7 +1101,7 @@ function spkSaveVoices() {
 const SPK_LIB_MIN = 0.88, SPK_LIB_MARGIN = 0.05;
 function spkLibMatch() {
   const lib = Object.entries((cfg.tpl && cfg.tpl.voices) || {}).map(([name, x]) => ({ name, v: b64f32(x.v) }));
-  if (!spk || !lib.length) return [];
+  if (!state.spk || !lib.length) return [];
   const G = spkGroupVecs();
   return G.map((c, k) => {
     const sc = lib.map((x) => spkDot(c, x.v)).map((s2, i) => [s2, i]).sort((a, b) => b[0] - a[0]);
@@ -1120,8 +1113,8 @@ function spkLibMatch() {
 // LLM 判定:声纹候选 + 字幕文本 + 模板(背景、说话人线索、出演者)→ 每组的名字、每句的说话人
 let spkJudging = false;
 async function spkJudge() {
-  const ss = curSess;
-  if (!spk || spkJudging || !ss) return;
+  const ss = state.curSess;
+  if (!state.spk || spkJudging || !ss) return;
   applySettings();
   if (!cfg.hasKey) return spkMsg(t("spk.needKey"));
   spkJudging = true; renderSpk(); spkBar(null);
@@ -1131,7 +1124,7 @@ async function spkJudge() {
     const jl = tl.map((l) => ({ id: l.id, s: l.ms / 1000, e: l.endMs / 1000, text: l.src || l.raw, voice: l.spkV || [], near: l.spkNear }));
     const r = await judgeSpeakers({
       lines: jl,
-      groups: (() => { const lm = spkLibMatch(); return spk.groups.map((gr, k) => ({ k, name: (spk.names[k] || "").trim(), dur: gr.dur, lib: lm[k] || undefined })); })(),
+      groups: (() => { const lm = spkLibMatch(); return state.spk.groups.map((gr, k) => ({ k, name: (state.spk.names[k] || "").trim(), dur: gr.dur, lib: lm[k] || undefined })); })(),
       description: cfg.tpl.description || "", spkNotes: cfg.tpl.spkNotes || "", people: g.people,
       share: SPK_SHARE,
     }, async (system, user, schema) => {
@@ -1142,29 +1135,29 @@ async function spkJudge() {
       const data = await res.json(); addMtCost(cfg.ctModel, data.usage);
       return JSON.parse(data.choices[0].message.content);
     });
-    if (curSess !== ss) return;
-    const names = reconcileGroupNames(jl, r, SPK_SHARE, spk.groups.length); // 组名和逐句判定对齐,重名且没句子支持的清空
-    spk.llm = { names, lines: [...r.lines].map(([id, v]) => [id, v.who, v.basis]), at: Date.now() };
+    if (state.curSess !== ss) return;
+    const names = reconcileGroupNames(jl, r, SPK_SHARE, state.spk.groups.length); // 组名和逐句判定对齐,重名且没句子支持的清空
+    state.spk.llm = { names, lines: [...r.lines].map(([id, v]) => [id, v.who, v.basis]), at: Date.now() };
     spkVote(); spkSave();
   } catch (e) { console.error(e); clearInterval(timer); spkJudging = false; spkMsg(t("spk.err", { m: e.message || String(e) })); renderSpk(false); return; }
   finally { spkJudging = false; clearInterval(timer); spkBar(null); }
-  if (curSess === ss) renderSpk();
+  if (state.curSess === ss) renderSpk();
 }
 // 开着说话人识别时自动跑完两步:本机声纹分析(没做过才做)→ GPT 判定(没判过或已作废才判)
 let spkAutoP = null;
-function spkAuto(ss = curSess) {
-  if (!ss || ss !== curSess || !spkOn() || !isFileSess() || fileJob.active || !ss.done || spkAutoP) return spkAutoP;
+function spkAuto(ss = state.curSess) {
+  if (!ss || ss !== state.curSess || !spkOn() || !isFileSess() || fileJob.active || !ss.done || spkAutoP) return spkAutoP;
   return (spkAutoP = (async () => {
     try {
       await spkLoad();
-      if (!spk) { if (!mediaBlob) return spkMsg(t("spk.needMedia")); await spkAnalyze(); }
-      if (spk && curSess === ss && !spk.llm) await spkJudge();
-    } finally { spkAutoP = null; if (curSess === ss) { if (!$("#spkPanel").hidden) renderSpk(); fileProgress(); } }
+      if (!state.spk) { if (!state.mediaBlob) return spkMsg(t("spk.needMedia")); await spkAnalyze(); }
+      if (state.spk && state.curSess === ss && !state.spk.llm) await spkJudge();
+    } finally { spkAutoP = null; if (state.curSess === ss) { if (!$("#spkPanel").hidden) renderSpk(); fileProgress(); } }
   })());
 }
 async function spkAfterFile(ss) {
-  if (curSess !== ss) return;
-  if (await spkLoad()) { spk.llm = null; spkVote(); spkSave(); } // 字幕重新生成了,旧的 GPT 判定对不上
+  if (state.curSess !== ss) return;
+  if (await spkLoad()) { state.spk.llm = null; spkVote(); spkSave(); } // 字幕重新生成了,旧的 GPT 判定对不上
   spkAuto(ss);
 }
 // 面板里的进度同步到主进度条(spkNow 记下当前这一步)
@@ -1176,20 +1169,20 @@ function spkPanel(on) { $("#spkPanel").hidden = !on; document.body.classList.tog
 function renderSpk(msg = true) {
   const on = spkOn(), busy = spkBusy || spkJudging || !!spkAutoP;
   $("#spkIntro").textContent = t(on ? "spk.introOn" : "spk.introOff");
-  $("#spkRun").textContent = t(!on ? "spk.enable" : spk ? "spk.rerun" : "spk.start"); $("#spkRun").disabled = busy || (on && !(curSess && curSess.done));
+  $("#spkRun").textContent = t(!on ? "spk.enable" : state.spk ? "spk.rerun" : "spk.start"); $("#spkRun").disabled = busy || (on && !(state.curSess && state.curSess.done));
   const list = $("#spkList"); list.replaceChildren(); $("#spkVoices").hidden = true;
   if (!on) { if (!busy) spkMsg(""); return; }
-  if (!spk) { if (!busy) spkMsg(t(!(curSess && curSess.done) ? "spk.wait" : mediaBlob ? "spk.none" : "spk.needMedia")); return; }
-  if (!busy && msg) spkMsg(t("spk.done", { k: spk.groups.length, a: spk.tagged, b: spk.timed }) + (spk.llm ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
+  if (!state.spk) { if (!busy) spkMsg(t(!(state.curSess && state.curSess.done) ? "spk.wait" : state.mediaBlob ? "spk.none" : "spk.needMedia")); return; }
+  if (!busy && msg) spkMsg(t("spk.done", { k: state.spk.groups.length, a: state.spk.tagged, b: state.spk.timed }) + (state.spk.llm ? " " + t("spk.judged", { n: lines.filter((l) => l.spkBy).length }) : ""));
   const libM = spkLibMatch(), libN = Object.keys((cfg.tpl && cfg.tpl.voices) || {});
-  $("#spkVoices").hidden = false; $("#spkSaveVoices").disabled = busy || !spk.groups.some((_, k) => spkName(k) !== t("spk.n", { n: k + 1 }));
+  $("#spkVoices").hidden = false; $("#spkSaveVoices").disabled = busy || !state.spk.groups.some((_, k) => spkName(k) !== t("spk.n", { n: k + 1 }));
   $("#spkLib").textContent = libN.length ? t("spk.lib", { names: libN.join("、") }) : t("spk.libNone"); $("#spkClearVoices").hidden = !libN.length;
-  spk.groups.forEach((g, k) => {
-    const ai = spk.llm && spk.llm.names[k], lm = libM[k];
-    const inp = el("input", { type: "text", value: spk.names[k] || "", placeholder: ai ? ai + " · AI" : t("spk.n", { n: k + 1 }) });
-    inp.onchange = () => { spk.names[k] = inp.value.trim(); spkVote(); spkSave(); renderSpk(); };
+  state.spk.groups.forEach((g, k) => {
+    const ai = state.spk.llm && state.spk.llm.names[k], lm = libM[k];
+    const inp = el("input", { type: "text", value: state.spk.names[k] || "", placeholder: ai ? ai + " · AI" : t("spk.n", { n: k + 1 }) });
+    inp.onchange = () => { state.spk.names[k] = inp.value.trim(); spkVote(); spkSave(); renderSpk(); };
     inp.onkeydown = (e) => { if (e.key === "Enter") inp.blur(); };
-    const play = el("button", { className: "btn i-play", textContent: t("spk.play"), onclick: () => { const i = g.sample; if (i < 0) return; seekTo(spk.segs[2 * i] * 1000); spkStopAt = spk.segs[2 * i + 1] * 1000 + 200; } });
+    const play = el("button", { className: "btn i-play", textContent: t("spk.play"), onclick: () => { const i = g.sample; if (i < 0) return; seekTo(state.spk.segs[2 * i] * 1000); state.spkStopAt = state.spk.segs[2 * i + 1] * 1000 + 200; } });
     list.append(el("div", { className: "spkItem" }, el("i", { className: "dot", style: "--c:" + SPK_COLORS[k % SPK_COLORS.length] }), inp, el("span", { className: "meta", textContent: t("spk.meta", { dur: fmtClock(g.dur * 1000), n: g.n }) + (lm ? " · " + t("spk.libMatch", { name: lm.name }) : "") }), play));
   });
 }
@@ -1197,7 +1190,7 @@ $("#spkOpen").onclick = async () => { spkPanel(true); renderSpk(); await spkLoad
 $("#spkClose").onclick = () => spkPanel(false);
 $("#spkRun").onclick = () => {
   if (!spkOn()) return spkAskEnable();
-  if (spk) { spk.llm = null; spkVote(); spkSave(); } // 重新识别:保留声纹分组和你起的名字,GPT 重新判定
+  if (state.spk) { state.spk.llm = null; spkVote(); spkSave(); } // 重新识别:保留声纹分组和你起的名字,GPT 重新判定
   spkAuto(); renderSpk();
 };
 $("#spkSaveVoices").onclick = spkSaveVoices;
@@ -1233,9 +1226,9 @@ function renderSessions() {
   $("#noKey").hidden = cfg.hasKey;
   const list = $("#sessList");
   list.replaceChildren();
-  if (!sessions.length) { list.append(el("div", { className: "emptyList", textContent: t("home.noSessions") })); return; }
-  for (const ss of [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)) {
-    const tp = sessTemplate(ss), cur = curSess && curSess.id === ss.id;
+  if (!state.sessions.length) { list.append(el("div", { className: "emptyList", textContent: t("home.noSessions") })); return; }
+  for (const ss of [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    const tp = sessTemplate(ss), cur = state.curSess && state.curSess.id === ss.id;
     const h = el("h3", { textContent: ss.name });
     h.append(el("span", { className: "tag", textContent: t(ss.kind === "file" ? "sess.file" : "sess.live") }));
     if (cur) h.append(el("span", { className: "tag", textContent: t("card.current") }));
@@ -1256,7 +1249,7 @@ function renderSessions() {
       el("div", { className: "btns" },
         btn("sess.continue", () => { useSession(ss.id); show("live"); }, true, "play"),
         btn("sess.rename", rename, false, "edit"),
-        btn("sess.export", () => download(fileName(ss.name) + ".txt", sessTranscript(lineStore.get(ss.id))), false, "download"),
+        btn("sess.export", () => download(fileName(ss.name) + ".txt", sessTranscript(state.lineStore.get(ss.id))), false, "download"),
         del)));
   }
 }
@@ -1270,7 +1263,7 @@ function renderHome() {
     const g = parseGlossary(tp.glossary);
     const h = el("h3", { textContent: tp.name });
     if (tp.builtin) h.append(el("span", { className: "tag", textContent: t(tp.modified ? "card.modified" : "card.builtin") }));
-    if (curSess && curSess.tplId === tp.id) h.append(el("span", { className: "tag", textContent: t("card.current") }));
+    if (state.curSess && state.curSess.tplId === tp.id) h.append(el("span", { className: "tag", textContent: t("card.current") }));
     const btn = (key, fn, primary, icon) => el("button", { className: "btn" + (primary ? " primary" : "") + " i-" + icon, textContent: t(key), onclick: fn });
     const btns = el("div", { className: "btns" },
       btn("card.open", () => { newSession(tp.id); show("live"); }, true, "play"),
@@ -1285,14 +1278,10 @@ function renderHome() {
       }, false, tp.builtin ? "restore" : "trash");
       btns.append(del);
     }
-    list.append(el("div", { className: "card" + (curSess && curSess.tplId === tp.id ? " current" : "") },
+    list.append(el("div", { className: "card" + (state.curSess && state.curSess.tplId === tp.id ? " current" : "") },
       h, el("div", { className: "meta", textContent: t("card.meta", { src: srcName(tp.source), tgt: tgtName(tp.target), p: g.people.length, n: g.terms.length }) }),
       tp.description ? el("div", { className: "meta desc", textContent: tp.description.slice(0, 120) + (tp.description.length > 120 ? "…" : "") }) : null, btns));
   }
-}
-function download(name, text, type = "text/plain") {
-  const a = el("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name });
-  document.body.append(a); a.click(); a.remove();
 }
 function exportTemplate(tp) {
   const { id, name, source, target, description, style, asrPrompt, spkNotes, glossary, voices } = tp;
@@ -1509,7 +1498,7 @@ async function creatorSend() {
   } finally {
     clearInterval(tick);
     creatorBusy = false; saveCreator();
-    if (view === "create") { renderChat(); renderDraft(); }
+    if (state.view === "create") { renderChat(); renderDraft(); }
   }
 }
 $("#chatSend").onclick = creatorSend;
@@ -1522,7 +1511,6 @@ function saveDraft() {
   creator.editId = id; saveCreator();
   return id;
 }
-function flashBtn(b, text) { const old = b.textContent; b.textContent = text; setTimeout(() => (b.textContent = old), 2000); }
 $("#dSave").onclick = () => { if (saveDraft()) show("tpl"); };
 $("#dSaveStart").onclick = () => { const id = saveDraft(); if (id) { newSession(id); show("live"); } };
 $("#dDiscard").onclick = (e) => {
@@ -1545,27 +1533,27 @@ async function listMics() {
   sel.value = cur;
   $("#micDevHint").textContent = t(devs.length && devs.every((d) => d.label) ? "set.micDevHint" : "set.micDevNoLabel");
 }
-$("#micDev").onchange = () => { store.set("micId", $("#micDev").value || null); cfg.micId = $("#micDev").value; if (running) restartMic(); };
+$("#micDev").onchange = () => { store.set("micId", $("#micDev").value || null); cfg.micId = $("#micDev").value; if (state.running) restartMic(); };
 if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", listMics);
 $("#openSettings").onclick = openSettings;
 $("#closeSettings").onclick = () => {
   applySettings();
   // 语言只改当前会话,不动模板
-  if (curSess && ($("#srcLang").value !== curSess.source || $("#tgtLang").value !== curSess.target)) { curSess.source = $("#srcLang").value; curSess.target = $("#tgtLang").value; saveSessions(); refreshTemplate(); }
+  if (state.curSess && ($("#srcLang").value !== state.curSess.source || $("#tgtLang").value !== state.curSess.target)) { state.curSess.source = $("#srcLang").value; state.curSess.target = $("#tgtLang").value; saveSessions(); refreshTemplate(); }
   $("#settings").hidden = true;
-  if (running && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() }));
-  if (view === "home") renderSessions();
-  if (view === "tpl") renderHome();
-  if (view === "live") showEmptyHint();
+  if (state.running && state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "session.update", session: sessionConfig() }));
+  if (state.view === "home") renderSessions();
+  if (state.view === "tpl") renderHome();
+  if (state.view === "live") showEmptyHint();
 };
 $("#uiLang").onchange = () => {
   setUiLang($("#uiLang").value); store.set("uiLang", getUiLang());
   applyI18n(); applySettings(); listMics(); setStatus(statusKey, statusKind, statusExtra); setFollow(follow); showLat();
-  $("#go").textContent = t(running ? "live.stop" : "live.start");
-  refreshTemplate(); if (view === "home") renderSessions(); if (view === "tpl") renderHome();
+  $("#go").textContent = t(state.running ? "live.stop" : "live.start");
+  refreshTemplate(); if (state.view === "home") renderSessions(); if (state.view === "tpl") renderHome();
 };
 ["#asrModel", "#mtModel", "#ctModel"].forEach((s) => $(s).addEventListener("change", showModelHints));
-$("#editCurTpl").onclick = () => { $("#settings").hidden = true; openCreator(sessTemplate(curSess) || cfg.tpl); };
+$("#editCurTpl").onclick = () => { $("#settings").hidden = true; openCreator(sessTemplate(state.curSess) || cfg.tpl); };
 ["#showSrc", "#tgtSize"].forEach((s) => $(s).addEventListener("input", applySettings));
 ["#maxGain", "#agcTarget", "#vad", "#silence", "#prefix", "#maxTurn", "#gain"].forEach((s) => $(s).addEventListener("input", applySettings));
 $("#resetAudio").onclick = () => { for (const [id, d] of Object.entries(AUDIO_DEFAULTS)) { const e = $("#" + id); if (e.type === "checkbox") e.checked = d; else e.value = d; } applySettings(); };
@@ -1577,14 +1565,14 @@ $("#copyAll").onclick = async (e) => {
   try { await navigator.clipboard.writeText(transcriptText()); flashBtn(e.target, t("rec.copied")); }
   catch { flashBtn(e.target, t("rec.copyFail")); }
 };
-$("#saveAll").onclick = () => download(fileName(curSess ? curSess.name : cfg.tpl.name) + ".txt", transcriptText());
+$("#saveAll").onclick = () => download(fileName(state.curSess ? state.curSess.name : cfg.tpl.name) + ".txt", transcriptText());
 $("#memoClear").onclick = (e) => { setMemo([]); flashBtn(e.target, t("rec.memoCleared")); };
 $("#resetCost").onclick = (e) => { cost.asr = cost.mt = 0; cost.save(); showLat(); flashBtn(e.target, t("rec.costCleared")); };
 let clearArmed = false;
 $("#clearAll").onclick = (e) => {
   if (!clearArmed) { clearArmed = true; e.target.textContent = t("rec.clearSure"); setTimeout(() => { clearArmed = false; e.target.textContent = t("rec.clear"); }, 3000); return; }
   lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; e.target.textContent = t("rec.clear"); setMemo([]);
-  cancelSave(); bumpGen(sessKey()); lineStore.set(sessKey(), null); if (curSess) { curSess.count = 0; saveSessions(); } showEmptyHint();
+  cancelSave(); bumpGen(sessKey()); state.lineStore.set(sessKey(), null); if (state.curSess) { state.curSess.count = 0; saveSessions(); } showEmptyHint();
 };
 // 摘要:整段记录一次发给模型;估算超过模型上下文的 40% 就按行切成几段,每段先写详细笔记,最后合并成摘要。
 // 估算偏保守,接口仍报上下文超长时把每段减半重来
@@ -1643,9 +1631,9 @@ setStatus("status.idle");
 showLat();
 show(["home", "tpl", "live", "create"].includes(store.get("view", "")) ? store.get("view", "") : "home");
 // 收音中离开页面先确认(iOS 不一定弹,字幕反正已存本地)
-window.addEventListener("beforeunload", (e) => { if (running) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => { if (state.running) { e.preventDefault(); e.returnValue = ""; } });
 // 切到后台 / 关页面前把防抖中的字幕写掉(iOS 回收后台标签页时不一定有 beforeunload)
 window.addEventListener("pagehide", flushLines);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushLines(); });
 // 给端到端测试用的观察口(模块作用域里的状态外面看不到)
-Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return spk; }, setPickFor: (v) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
+Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, setPickFor: (v) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
