@@ -1,17 +1,16 @@
 // @ts-nocheck —— 从单文件页面整体搬过来的主程序,之后按功能逐步拆模块、补类型
 import "./style.css";
-import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD, SPK_MODEL } from "./config";
-import { parseGlossary, glossaryText } from "./glossary";
+import { BUILTIN, SERVER_API, ASR_MODEL, MT_MODEL, CT_MODEL, VAD, BUILD } from "./config";
+import { parseGlossary } from "./glossary";
 import { fmtClock, subtitleFile } from "./subtitle";
 import { estTokens, splitByTokens } from "./tokens";
 import { LineStore, mergeLegacy } from "./linestore";
 import { store, storageFailed, setStorageWarn, idb, lsKV } from "./storage";
 import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "./i18n";
-import { fetchProgress, extractPcm, splitTimed } from "./media";
-import { readResponseStream, partialJsonString } from "./sse";
+import { extractPcm, splitTimed } from "./media";
 import { asrPrompt, keywords, glossaryForLLM } from "./prompts";
-import { WEB_SEARCH_PER_CALL, asrCost, mtCost } from "./cost";
+import { asrCost, mtCost } from "./cost";
 import { state, cfg, lines } from "./state";
 import { $, el, flash, flashBtn, download } from "./dom";
 import { initSessions, saveSessions, sget, sset, sessTemplate, newSession, useSession, refreshTemplate, migrateToSessions, fileName, renderSessions } from "./sessions";
