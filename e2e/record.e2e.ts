@@ -1,6 +1,8 @@
 // 实时会话录音(live-record.ts):假麦克风(flite 合成的 WAV)→ MediaRecorder 分块存 IndexedDB → 转成文件会话 → ffmpeg.wasm 提取 PCM;删实时会话连录音一起删
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { test, expect, openApp, start, translated, idbKeys, deleteSession, openSession } from "./fixtures";
 import { ttsConversation } from "./tts";
@@ -231,4 +233,76 @@ test("storage full: recording stops with a message, listening goes on", async ({
   expect(await page.evaluate(() => window.__ws.readyState)).toBe(1);
   await expect(page.locator("#go.stop")).toBeVisible();
   expect(await idbSizes(page, "rec:sA:")).toEqual([]);
+});
+
+/** 转好的文件会话的音频时长(秒,浏览器解码) */
+const fileDur = (page: Page, k: string) => page.evaluate(async (k) => {
+  const f = await new Promise<Blob>((r) => { const q = indexedDB.open("jls", 1); q.onsuccess = () => { const g = q.result.transaction("files").objectStore("files").get(k); g.onsuccess = () => r(g.result); }; });
+  return (await new OfflineAudioContext(1, 1, 48000).decodeAudioData(await f.arrayBuffer())).duration;
+}, k);
+
+test("stopping and converting at once still includes the last chunk", async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors = await openApp(page);
+  await page.click("#recBtn"); await page.click("#recOk");
+  await start(page);
+  await expect(page.locator("#recBtn.live")).toBeVisible();
+  const t0 = Date.now();
+  // 第一块(10 秒)存好之后再录几秒:最后一块只在停止时才给
+  await expect.poll(async () => (await idbSizes(page, "rec:sA:")).length, { timeout: 20_000, intervals: [200] }).toBeGreaterThan(0);
+  await page.waitForTimeout(3000);
+  // 停止和点「转换」在同一刻:最后一块的 dataavailable / 写入还没完成
+  const wall = await page.evaluate(() => { document.querySelector<HTMLElement>("#go")!.click(); document.querySelector<HTMLElement>("#recConvert")!.click(); return Date.now(); }) - t0;
+  await page.waitForFunction(() => localStorage.getItem("jls.curSession") !== "sA", null, { timeout: 30_000 });
+  const fid = await page.evaluate(() => localStorage.getItem("jls.curSession")!);
+  const dur = await fileDur(page, fid), recMs = (await sess(page, "sA")).rec.parts[0];
+  console.log(`converted right after stop: ${dur.toFixed(2)} s of audio, recorded ~${(wall / 1000).toFixed(2)} s (part ${((recMs.t1 - recMs.t0) / 1000).toFixed(2)} s)`);
+  expect(Math.abs(dur * 1000 - wall)).toBeLessThan(1500);
+  expect((await sess(page, fid)).file.size).toBe((await sess(page, "sA")).rec.bytes);
+  expect(errors).toEqual([]);
+});
+
+test("asks for data itself when MediaRecorder ignores the timeslice (some Safari versions)", async ({ page }) => {
+  test.setTimeout(90_000);
+  await openApp(page, () => {
+    const st = MediaRecorder.prototype.start;
+    MediaRecorder.prototype.start = function () { return st.call(this); }; // 不理 timeslice:数据到 stop 才给
+  });
+  await page.click("#recBtn"); await page.click("#recOk");
+  await start(page);
+  const t0 = Date.now();
+  // 2 个 timeslice 没数据 → 之后每个 timeslice requestData():30 秒内(还在录)就有块落盘
+  await expect.poll(async () => (await idbSizes(page, "rec:sA:")).length, { timeout: 40_000, intervals: [500] }).toBeGreaterThan(0);
+  console.log(`first chunk without timeslice after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  await expect(page.locator("#recBtn.live")).toBeVisible();
+  await page.click("#go");
+});
+
+test("concatAudio joins parts with different sample rates and channel counts", async ({ page }) => {
+  test.setTimeout(90_000);
+  await openApp(page);
+  const dir = mkdtempSync(join(tmpdir(), "tsuji-concat-"));
+  // 真的 webm/opus 和 m4a/aac:一段单声道、一段立体声,采样率也不同
+  const mk = (name: string, f: number, ar: number, ac: number, codec: string) => {
+    const out = join(dir, name);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", `sine=f=${f}:d=2:sample_rate=${ar}`, "-ac", String(ac), "-ar", String(ar), "-c:a", codec, out]);
+    return [...readFileSync(out)];
+  };
+  const cases = [
+    { mp4: false, parts: [mk("a.webm", 440, 16000, 1, "libopus"), mk("b.webm", 660, 48000, 2, "libopus")], type: "audio/webm" },
+    { mp4: true, parts: [mk("a.m4a", 440, 44100, 1, "aac"), mk("b.m4a", 660, 48000, 2, "aac")], type: "audio/mp4" },
+  ];
+  for (const c of cases) {
+    const bytes = await page.evaluate(async ({ parts, mp4, type }) => {
+      const b = await window.__t.concatAudio(parts.map((p: number[]) => new Blob([new Uint8Array(p)], { type })), mp4, () => {}, () => {});
+      return [...new Uint8Array(await (b as Blob).arrayBuffer())];
+    }, c);
+    const out = join(dir, "out." + (c.mp4 ? "m4a" : "webm"));
+    writeFileSync(out, new Uint8Array(bytes));
+    const probe = execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=sample_rate,channels:format=duration", "-of", "json", out]).toString();
+    const j = JSON.parse(probe), dur = Number(j.format.duration);
+    console.log(`concat ${c.mp4 ? "m4a" : "webm"}: ${dur.toFixed(2)} s, ${j.streams[0].sample_rate} Hz, ${j.streams[0].channels} ch`);
+    expect(Math.abs(dur - 4)).toBeLessThan(0.15);
+    expect(j.streams[0].channels).toBe(1);
+  }
 });

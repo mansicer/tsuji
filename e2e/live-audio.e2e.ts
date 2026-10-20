@@ -127,3 +127,38 @@ test("streaming-model lines get times from local energy segmentation", async ({ 
     expect(l.ms).toBeNull();
   }
 });
+
+test("streaming: two sentences in one delta share the speech; a speaker who just started is left for the next line", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() => { document.querySelector<HTMLSelectElement>("#asrModel")!.value = "gpt-live-transcribe"; });
+  await start(page);
+  const off = await clockOffset(page);
+  const delta = (d: string) => page.evaluate((d) => window.__ws.emit({ type: "conversation.item.input_audio_transcription.delta", item_id: "s", delta: d }), d);
+  // 一个 delta 里两句:不再是第二句几乎零长度,两句按字数分「第一句开口 → 第二句说完」
+  const [s0, e0] = occ(0, 0, off), [s1, e1] = occ(1, e0, off);
+  await waitNow(page, e1 + 400);
+  await delta("おはようございます。はい。");
+  let got = await timed(page);
+  console.log("one delta", JSON.stringify(got), "expected", [s0, e0, s1, e1]);
+  expect(got.map((l) => l.raw)).toEqual(["おはようございます。", "はい。"]);
+  expect(Math.abs(got[0].aStart - s0)).toBeLessThanOrEqual(150);
+  expect(Math.abs(got[1].aEnd - e1)).toBeLessThanOrEqual(150);
+  expect(got[0].aEnd).toBe(got[1].aStart);
+  expect(got[1].aEnd - got[1].aStart).toBeGreaterThan(300);
+  // 下一轮:第一个人说完,第二个人刚开口 ~300 ms 时字幕才出 → 这一行到第一个人说完为止
+  const [s2, e2] = occ(0, e1 + 100, off), [s3, e3] = occ(1, e2, off);
+  await waitNow(page, s3 + 250);
+  // 行出来后可能被翻译队列和前后的短行合并,所以每次出行马上读
+  const line = async (raw: string) => { await delta(raw); return (await timed(page)).find((l) => l.raw === raw)!; };
+  const a = await line("おはよう。");
+  // 第二个人说完再出他的那一行:从他开口算起
+  await waitNow(page, e3 + 400);
+  got = [a, await line("どうも。")];
+  console.log("next speaker", JSON.stringify(got), "expected", [s2, e2, s3, e3]);
+  expect(got.map((l) => l.raw)).toEqual(["おはよう。", "どうも。"]);
+  expect(Math.abs(got[0].aStart - s2)).toBeLessThanOrEqual(150);
+  expect(Math.abs(got[0].aEnd - e2)).toBeLessThanOrEqual(150);
+  expect(got[0].aEnd).toBeLessThan(s3);
+  expect(Math.abs(got[1].aStart - s3)).toBeLessThanOrEqual(150);
+  expect(Math.abs(got[1].aEnd - e3)).toBeLessThanOrEqual(150);
+});

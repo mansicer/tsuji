@@ -44,7 +44,8 @@ export async function extractPcm(blob: Blob, cb: ExtractCallbacks): Promise<Int1
   } finally { ff.off("progress", onP); await ff.unmount("/in").catch(() => {}); }
 }
 // 录音的几段(各自是完整的 webm / mp4,时间戳都从 0 起,不能直接拼字节)接成一个文件:concat 滤镜解码后重新编码。
-// 和录音同格式:webm 用 Opus(Chromium 不一定能解 AAC),Safari 录的 mp4 用 AAC
+// 和录音同格式:webm 用 Opus(Chromium 不一定能解 AAC),Safari 录的 mp4 用 AAC。
+// 各段采样率、声道可能不同(中途换蓝牙耳机、channelCount: 1 没生效),先各自统一成 48 kHz 单声道再接
 export async function concatAudio(blobs: Blob[], mp4: boolean, onLoad: (p: number) => void, onP: (p: number) => void): Promise<Blob> {
   const ff = await loadFfmpeg(onLoad);
   const prog = ({ progress }: { progress: number }) => onP(Math.max(0, Math.min(1, progress || 0)));
@@ -53,8 +54,10 @@ export async function concatAudio(blobs: Blob[], mp4: boolean, onLoad: (p: numbe
   try {
     await ff.createDir("/rec").catch(() => {});
     await ff.mount("WORKERFS" as FFFSType, { blobs: blobs.map((data, i) => ({ name: "p" + i, data })) }, "/rec");
-    const ins = blobs.flatMap((_, i) => ["-i", "/rec/p" + i]), f = blobs.map((_, i) => `[${i}:a]`).join("") + `concat=n=${blobs.length}:v=0:a=1[a]`;
-    const rc = await ff.exec([...ins, "-filter_complex", f, "-map", "[a]", "-ac", "1", ...(mp4 ? ["-c:a", "aac", "-b:a", "48k"] : ["-c:a", "libopus", "-b:a", "32k"]), out]);
+    const ins = blobs.flatMap((_, i) => ["-i", "/rec/p" + i]);
+    const f = blobs.map((_, i) => `[${i}:a]aresample=48000,aformat=sample_rates=48000:channel_layouts=mono[n${i}];`).join("")
+      + blobs.map((_, i) => `[n${i}]`).join("") + `concat=n=${blobs.length}:v=0:a=1[a]`;
+    const rc = await ff.exec([...ins, "-filter_complex", f, "-map", "[a]", "-ac", "1", "-ar", "48000", ...(mp4 ? ["-c:a", "aac", "-b:a", "48k"] : ["-c:a", "libopus", "-b:a", "32k"]), out]);
     if (rc !== 0) throw new Error("ffmpeg " + rc);
     const d = await ff.readFile(out) as Uint8Array; await ff.deleteFile(out).catch(() => {});
     return new Blob([d as Uint8Array<ArrayBuffer>], { type: mp4 ? "audio/mp4" : "audio/webm" });

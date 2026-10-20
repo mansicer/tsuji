@@ -4,6 +4,10 @@ import { spkResample, spkSegments } from "./spk/core";
 import type { Line } from "./state";
 
 const SR = 24000, PAD = 12; // PAD:重采样核半宽,切片两头多取一点,边缘和整段重采样一致
+/** 流式字幕比音频晚出:离现在不到 GUESS_MARGIN 才开口的有声段多半是下一句(可能是下一个人),不算进这一行 */
+export const GUESS_MARGIN = 600;
+/** 强制断句等 committed 的期限;没等到(服务端缓冲已空、报错)就作废 */
+const FORCED_TTL = 10000, ITEM_TTL = 60000;
 
 /** Realtime 服务端事件里用到的字段 */
 export interface RtEvent { type: string; item_id?: string; audio_start_ms?: number; audio_end_ms?: number }
@@ -16,7 +20,8 @@ export class LiveAudio {
   connAt = 0;
   /** 上一行实时字幕的结束 at */
   lastEnd = 0;
-  private items: Record<string, { s?: number; e?: number }> = {};
+  /** t:建这条记录时的 at,太久没 completed 的清掉 */
+  private items: Record<string, { s?: number; e?: number; t: number }> = {};
   private forcedAt: number[] = [];
   private commitEnd: number | null = null;
   constructor(readonly sec = 60) { this.buf = new Int16Array(SR * sec); }
@@ -63,42 +68,66 @@ export class LiveAudio {
   map(ms: number): number { return this.connAt + ms; }
   /** 发强制断句的 commit 时调(这种段没有 speech_stopped) */
   forced(): void { this.forcedAt.push(this.now()); }
+  private item(id: string): { s?: number; e?: number; t: number } { return (this.items[id] ||= { t: this.now() }); }
   /**
    * 跟踪 item 的起止(和文件会话 fileConnect 的逻辑一样)。completed 时返回这一句的 [s, e](at),其他事件返回 null。
    * speech_started / speech_stopped 带 item_id 和 audio_start_ms / audio_end_ms;committed、completed 只带 item_id
    */
   event(m: RtEvent): [number, number] | null {
-    const id = m.item_id || "";
-    if (m.type === "input_audio_buffer.speech_started") { if (typeof m.audio_start_ms === "number") (this.items[id] ||= {}).s = this.map(m.audio_start_ms); }
-    else if (m.type === "input_audio_buffer.speech_stopped") { if (typeof m.audio_end_ms === "number") (this.items[id] ||= {}).e = this.map(m.audio_end_ms); }
-    else if (m.type === "input_audio_buffer.committed") {
+    const id = m.item_id || "", now = this.now();
+    // 一直没 completed 的 item、等不到 committed 的强制断句都清掉,免得越积越多、错配到后面的句子上
+    for (const k in this.items) if (now - this.items[k].t > ITEM_TTL) delete this.items[k];
+    while (this.forcedAt.length && now - this.forcedAt[0] > FORCED_TTL) this.forcedAt.shift();
+    if (m.type === "input_audio_buffer.speech_started") { if (typeof m.audio_start_ms === "number") this.item(id).s = this.map(m.audio_start_ms); }
+    else if (m.type === "input_audio_buffer.speech_stopped") {
+      if (typeof m.audio_end_ms === "number") this.item(id).e = this.map(m.audio_end_ms);
+      // VAD 自己断了句:还没等到 committed 的强制 commit 撞上了空缓冲(服务端报错、不会有 committed),作废
+      this.forcedAt = [];
+    } else if (m.type === "input_audio_buffer.committed") {
       // 强制断句的段没有 speech_stopped:结束时间用发 commit 时的位置;紧接着的下一段从这里开始
-      const it = (this.items[id] ||= {});
+      const it = this.item(id);
       if (it.s == null) it.s = this.commitEnd ?? this.lastEnd;
-      if (it.e == null) it.e = this.forcedAt.shift() ?? this.now();
+      if (it.e == null) it.e = this.forcedAt.shift() ?? now;
       this.commitEnd = it.e;
     } else if (m.type === "conversation.item.input_audio_transcription.completed") {
-      const it = this.items[id] || {}; delete this.items[id];
-      const s = it.s ?? this.lastEnd, e = Math.max(s + 300, it.e ?? this.now());
+      const it = this.items[id]; delete this.items[id];
+      const s = it?.s ?? this.lastEnd, e = Math.max(s + 300, it?.e ?? now);
       this.lastEnd = e;
       return [Math.round(s), Math.round(e)];
     }
     return null;
   }
   /**
-   * 流式模型没有 VAD 事件:在「上一行结束 → 现在」这段里做能量切分,有声部分的首尾就是这一行的起止;
-   * 找不到有声段就用 [上一行结束, 现在]
+   * 流式模型没有 VAD 事件:同一批 delta 切出的几句(w 是各句字数)一起定时间。在「上一行结束 → 现在」里做能量切分:
+   * 离现在不到 GUESS_MARGIN 才开口的段留给下一行;最后一段已经说完就到它结束,还在说就到前一个停顿,
+   * 没有停顿就到「现在 − GUESS_MARGIN」。这段范围按字数比例分给各句(和文件的 splitTimed 一样)
    */
-  guess(): [number, number] {
-    const to = this.now(), from = Math.min(to, Math.max(this.lastEnd, this.oldest()));
-    let s = from, e = to;
+  guess(w: number[] = [1]): [number, number][] {
+    const to = this.now(), from = Math.min(to, Math.max(this.lastEnd, this.oldest())), lim = Math.max(from, to - GUESS_MARGIN);
+    let s = from, e = lim;
     const pcm = this.pcm(from, to);
     if (pcm && pcm.length >= SR * 0.2) {
-      const segs = spkSegments(pcm, SR, 0.25, 10, 0.15);
-      if (segs.length) { s = from + segs[0][0] * 1000; e = from + segs[segs.length - 1][1] * 1000; }
+      const segs: [number, number][] = [];
+      for (const [a, b] of spkSegments(pcm, SR, 0.25, 10, 0.15)) {
+        const x = from + a * 1000, y = from + b * 1000, p = segs[segs.length - 1];
+        if (p && x - p[1] < 50) p[1] = y; else segs.push([x, y]); // 长段被切成几块的接回去
+      }
+      const keep = segs.filter((g) => g[0] < lim);
+      if (keep.length) {
+        const last = keep[keep.length - 1];
+        s = keep[0][0];
+        e = to - last[1] >= 100 ? last[1] : keep.length > 1 ? keep[keep.length - 2][1] : Math.max(s, lim);
+      }
     }
     this.lastEnd = Math.max(this.lastEnd, e);
-    return [Math.round(s), Math.round(e)];
+    const tot = w.reduce((a, x) => a + Math.max(0, x), 0), out: [number, number][] = [];
+    let acc = 0;
+    for (const x of w) {
+      const a = s + (e - s) * (tot ? acc / tot : out.length / w.length);
+      acc += Math.max(0, x);
+      out.push([Math.round(a), Math.round(s + (e - s) * (tot ? acc / tot : (out.length + 1) / w.length))]);
+    }
+    return out;
   }
   /** 停止收音:时钟归零、清空缓冲 */
   stop(): void { this.total = 0; this.connAt = 0; this.lastEnd = 0; this.items = {}; this.forcedAt = []; this.commitEnd = null; }

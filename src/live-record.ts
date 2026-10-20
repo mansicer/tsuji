@@ -54,6 +54,12 @@ export interface RecDeps {
 }
 let D: RecDeps;
 let mr: MediaRecorder | null = null, confirmSid = "", converting = false;
+/** 已经叫停、最后一块还没写完的录音:onstop 时最后一次 dataavailable 的写入完成才 resolve */
+const flushing = new Set<Promise<void>>();
+/** 每个录音的收尾函数;recEnd 后迟迟不来 onstop 时兜底调用,免得「转成文件会话」一直不出来 */
+const finish = new Map<MediaRecorder, () => void>();
+/** 等所有已停的录音把最后一块写进 IndexedDB */
+export function recFlushed(): Promise<void> { return Promise.all([...flushing]).then(() => {}); }
 
 /** 开始新的一段:收音开始、重开麦克风、收音中打开录音时调用。stream 是 startMic 建的那个 */
 export function recBegin(stream: MediaStream | null): void {
@@ -67,10 +73,24 @@ export function recBegin(stream: MediaStream | null): void {
   // 段信息先同步落盘,之后这段的块才写:刷新后不会和旧块撞键
   rec.parts.push({ t0: now, t1: now, ...(at != null ? { at } : {}), mime: r.mimeType || mime, bytes: 0 });
   D.saveSessions();
-  let n = 0;
+  let n = 0, writes = Promise.resolve(), lastData = Date.now(), poke = false, done = () => {};
+  const flushed = new Promise<void>((res) => (done = res));
+  flushing.add(flushed); finish.set(r, done);
+  flushed.then(() => { flushing.delete(flushed); finish.delete(r); recUi(); });
   mr = r;
-  r.ondataavailable = (e) => { if (e.data && e.data.size) saveChunk(ss, p, n++, e.data, r); };
-  r.onstop = () => { if (mr === r) { mr = null; recUi(); } }; // 音轨断了也会自己停
+  // 块按顺序写;最后一块(stop 时的 dataavailable)写完 onstop 才算收尾
+  r.ondataavailable = (e) => { lastData = Date.now(); if (e.data && e.data.size) { const b = e.data, k = n++; writes = writes.then(() => saveChunk(ss, p, k, b, r)); } };
+  // 有的 Safari 不理 timeslice(或拖很久),数据要到 stop 才给,标签页被杀这一段就全丢了:
+  // 超过 2 个 timeslice 没收到 dataavailable,就改成每个 timeslice 主动 requestData()
+  const tick = setInterval(() => {
+    if (r.state !== "recording") return;
+    if (poke || Date.now() - lastData > 2 * REC_SLICE) { poke = true; try { r.requestData(); } catch {} }
+  }, REC_SLICE);
+  r.onstop = () => { // 音轨断了也会自己停
+    clearInterval(tick);
+    if (mr === r) { mr = null; recUi(); }
+    writes.then(done, done);
+  };
   r.onerror = (e) => { console.error(e); if (mr === r) recEnd(); };
   recUi();
 }
@@ -78,6 +98,7 @@ export function recBegin(stream: MediaStream | null): void {
 export function recEnd(): void {
   const r = mr; mr = null;
   if (r && r.state !== "inactive") { try { r.stop(); } catch {} }
+  if (r) setTimeout(() => finish.get(r)?.(), 10000);
   recUi();
 }
 export const recActive = (): boolean => !!mr;
@@ -113,7 +134,7 @@ export function recUi(): void {
   else b.textContent = t(on ? "lrec.armed" : "lrec.btn");
   b.title = t("lrec.tip"); b.setAttribute("aria-pressed", String(on));
   if (!live || confirmSid !== ss!.id) { $("#recConfirm").hidden = true; confirmSid = ""; }
-  const has = live && !state.running && !mr && recCount(rec) > 0;
+  const has = live && !state.running && !mr && !flushing.size && recCount(rec) > 0; // 最后一块写完再显示,大小才准
   $("#recBar").hidden = !has;
   if (has && !converting) $("#recInfo").textContent = t("lrec.info", { n: recCount(rec), dur: fmtClock(recDur(rec!)), size: fmtBytes(rec!.bytes) });
   // 转过了、文件会话还在:按钮改成打开它;文件会话被删了才再转
@@ -142,6 +163,7 @@ async function recConvert(): Promise<void> {
   const info = (s: string) => ($("#recInfo").textContent = s);
   try {
     info(t("lrec.reading"));
+    await recFlushed(); // 刚停就点:最后一块(最多 10 秒)还在写
     const blobs = partBlobs(ss.rec, await idb.entries(recPrefix(ss.id)));
     if (!blobs.length) throw new Error(t("lrec.empty"));
     const blob = blobs.length === 1 ? blobs[0] : await concatAudio(blobs, recExt(blobs[0].type) === "m4a",

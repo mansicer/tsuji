@@ -7,7 +7,7 @@ import { LineStore, mergeLegacy } from "./linestore";
 import { store, storageFailed, setStorageWarn, idb, lsKV } from "./storage";
 import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "./i18n";
-import { extractPcm, splitTimed } from "./media";
+import { extractPcm, splitTimed, concatAudio } from "./media";
 import { asrPrompt, keywords, glossaryForLLM } from "./prompts";
 import { asrCost, mtCost } from "./cost";
 import { state, cfg, lines, type Line, type Session, type Template, type View } from "./state";
@@ -302,23 +302,31 @@ function sessionConfig() {
 }
 // 本次收音(当前音频时钟)里出的行;恢复出来的行的 aStart / aEnd 是以前的时钟,合并时不能混用
 let clockLines = new WeakSet<Line>();
-/** tm:这一句在音频时钟上的 [起, 止](VAD 事件给的);流式模型没有,按能量切分估 */
+// 只有标点/空白的碎片(比如 delta 开头单独一个「。」)不出行
+const hasText = (s: string) => !!s && /[^\s。、！？!?,.，「」『』()（）…]/.test(s);
+/** tm:这一句在音频时钟上的 [起, 止](VAD 事件给的);流式模型没有,走 emitGuessed */
 function emitLine(text: string, tm?: [number, number]): void {
-  // 只有标点/空白的碎片(比如 delta 开头单独一个「。」)丢掉
-  if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
+  if (!hasText(text)) return;
   const line = addLine(++state.nextId, text);
-  [line.aStart, line.aEnd] = tm || liveAudio.guess(); clockLines.add(line); // 不设 ms:那是文件会话的媒体时间
+  [line.aStart, line.aEnd] = tm || liveAudio.guess()[0]; clockLines.add(line); // 不设 ms:那是文件会话的媒体时间
   diag.asr++; queue.push(line); lineAudio(line); pumpTranslate(); showLat();
+}
+/** 流式模型:同一批 delta 切出的几句一起按能量切分估时间,按字数分 */
+function emitGuessed(texts: string[]): void {
+  const ok = texts.filter(hasText); if (!ok.length) return;
+  const tms = liveAudio.guess(ok.map((x) => x.replace(/\s/g, "").length));
+  ok.forEach((x, i) => emitLine(x, tms[i]));
 }
 function liveDelta(delta: string): void {
   liveBuf += delta; liveUncommitted = true;
   // 日中文只按全角句末标点断句:半角 ! ? 常出现在节目名里(EXTEND STEP HOOOOPE!);其他语言按半角句末 + 空格
   const re = ["ja", "zh"].includes(cfg.tpl.source) ? /^[\s\S]*?[。！？]+[」』）)]*/ : /^[\s\S]*?(?:[。！？]+[」』）)]*|[.!?]+["')\]]*(?=\s))/;
-  let m: RegExpMatchArray | null;
+  let m: RegExpMatchArray | null; const out: string[] = [];
   while ((m = liveBuf.match(re))) {
-    emitLine(m[0].trim());
+    out.push(m[0].trim());
     liveBuf = liveBuf.slice(m[0].length);
   }
+  emitGuessed(out);
   liveBuf = liveBuf.replace(/^\s+/, "");
   $("#partial").textContent = liveBuf;
   clearTimeout(liveIdle ?? undefined);
@@ -328,7 +336,7 @@ function liveFlush() {
   clearTimeout(liveIdle ?? undefined); liveIdle = null;
   const s = liveBuf.trim(); liveBuf = "";
   $("#partial").textContent = "";
-  emitLine(s);
+  emitGuessed([s]);
   // 停顿时 commit,免得一整场都堆在同一个 item 里;commit 后的 completed 文本已经按 delta 出过了,忽略
   if (liveUncommitted && state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" })); liveUncommitted = false; }
 }
@@ -1014,4 +1022,4 @@ window.addEventListener("beforeunload", (e) => { if (state.running) { e.preventD
 window.addEventListener("pagehide", flushLines);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushLines(); });
 // 给端到端测试用的观察口(模块作用域里的状态外面看不到)
-Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, liveAudio, spkEngine, lspk: liveSpkDebug, liveSpk, transcriptText, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
+Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, liveAudio, concatAudio, spkEngine, lspk: liveSpkDebug, liveSpk, transcriptText, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
