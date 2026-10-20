@@ -38,6 +38,8 @@ export interface Line {
   tEnd?: Date;
   /** 文件会话:在媒体里的起止毫秒 */
   ms?: number; endMs?: number;
+  /** 实时会话:音频时钟上的起止毫秒(见 live-audio.ts)。不是 ms / endMs:那两个是文件的媒体时间,管跳转、叠加字幕和 SRT */
+  aStart?: number; aEnd?: number;
   /** 说话人:spk 名字("" = 不确定),spc 颜色序号,spkBy GPT 判定依据,spkV 声纹候选 [组号, 占比],spkNear 最近片段的距离(秒) */
   spk?: string; spc?: number; spkBy?: Basis; spkV?: [number, number][]; spkNear?: number;
 }

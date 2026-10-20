@@ -8,6 +8,8 @@ export interface SavedLine {
   id: number; raw?: string; src?: string; tgt?: string; t?: number; done?: boolean;
   /** 文件会话:在媒体里的起止毫秒 */
   s?: number; e?: number;
+  /** 实时会话:音频时钟上的起止毫秒(Line.aStart / aEnd) */
+  as?: number; ae?: number;
   /** 说话人:名字、颜色序号、GPT 判定依据 */
   k?: string; kc?: number; kb?: Basis;
   /** 很早的版本把原文 / 译文存成 ja / zh */

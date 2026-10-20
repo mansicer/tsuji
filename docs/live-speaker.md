@@ -39,6 +39,8 @@ New, backward compatible: an entry may also carry `alts?: { v: string; d: number
 - The Realtime session reports `audio_start_ms`/`audio_end_ms` relative to the first audio appended on that WebSocket connection. `live-audio.ts` records `connAt` when each connection starts sending, and maps `at = connAt + audio_*_ms`.
 - A live line gets `line.aStart` / `line.aEnd` (audio-clock ms). These are **separate from** `line.ms` / `line.endMs`, which are file-session media times and drive seek, overlay and SRT export. Live lines must keep `ms` undefined.
 - Streaming ASR models (`gpt-live-transcribe`, `gpt-realtime-whisper`) have no VAD events. For them, the times come from local energy segmentation (`spkSegments`) of the buffer around the moment the line was emitted.
+- `onLineAudio(cb: (line: Line) => void): () => void` (returns an unsubscribe) fires right after a new live line gets `aStart`/`aEnd`, before translation. It fires again for the earlier line when a short line is merged into it and its `aEnd` grows. Lines restored from storage keep their saved `aStart`/`aEnd` (keys `as`/`ae`), but those belong to an earlier clock and must not be passed to `slice()`; `onLineAudio` never fires for them.
+- Also exported for the pipeline: `liveAudio.pcm(fromAt, toAt): Int16Array | null` (raw 24 kHz) and `liveAudio.oldest()` (earliest `at` still buffered). `begin()`, `forced()`, `event(m)` and `guess()` are only for `main.ts`.
 
 ### Live speaker state (`spk/live.ts`)
 ```ts
