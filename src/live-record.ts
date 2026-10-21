@@ -68,7 +68,7 @@ export function recBegin(stream: MediaStream | null): void {
   const mime = pickMime((m) => MediaRecorder.isTypeSupported(m));
   let r: MediaRecorder;
   try { r = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: REC_BPS }); r.start(REC_SLICE); }
-  catch (e) { console.error(e); flash(t("lrec.fail") + (e as Error).message); return; }
+  catch (e) { console.error(e); ss.rec.on = false; D.saveSessions(); recUi(); flash(t("lrec.fail") + (e as Error).message); return; } // 开关关掉,免得下次收音又悄悄重试
   const rec = ss.rec, p = rec.parts.length, now = Date.now(), at = D.audioNow ? D.audioNow() : null;
   // 段信息先同步落盘,之后这段的块才写:刷新后不会和旧块撞键
   rec.parts.push({ t0: now, t1: now, ...(at != null ? { at } : {}), mime: r.mimeType || mime, bytes: 0 });

@@ -85,7 +85,7 @@ The judge request sends the lines since the last call, plus a summary of each gr
 - **Test audio (`e2e/tts.ts`).** ffmpeg's `flite` filter provides four distinct English voices: `kal`, `awb`, `rms` and `slt`. This file is the only generator. WAVs are generated in test setup and never committed.
   - `ttsConversation(turns, opts) → { path, timeline, durationMs, rate }`, where `turns` is `{ voice, text, gapMs? }[]`. Each sentence is synthesised, trimmed of leading and trailing silence, and preceded by `gapMs` of silence (default `opts.gapMs`, 600). The WAV ends with `opts.tailMs` of silence (default 1000).
   - `timeline[i].startMs` / `endMs` mark the voiced part of each sentence. They serve as the reference labels.
-  - `opts.trim` sets when a 10 ms frame counts as silent. With `"peak"` (default), its peak is below 1 % of full scale. With `"rms"`, its RMS is, which trims tighter.
+  - `opts.trim` sets when a 10 ms frame counts as silent. With `"peak"` (default), its peak is below 1 % of full scale. With `"rms"`, its RMS is below 1 % of full scale instead, which trims tighter.
   - Other options: `opts.rate` (default 24000), `opts.af` (an extra ffmpeg `-af` chain such as `ROOM_AF`) and `opts.out` (default: a content-addressed file in the OS temp dir).
   - Also exported: `synth(voice, text)`, `readWav`/`writeWav` (mono 16-bit PCM), `ROOM_AF` and `addNoise(src, out, noiseDb)`. Files are written atomically (temp file, then rename), so parallel workers never read half a WAV.
   - CLI: `node e2e/tts.ts out.wav` writes a four-voice demo conversation and prints its timeline as JSON.

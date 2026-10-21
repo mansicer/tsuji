@@ -306,3 +306,13 @@ test("concatAudio joins parts with different sample rates and channel counts", a
     expect(j.streams[0].channels).toBe(1);
   }
 });
+
+test("if the recorder cannot start, the recording switch turns itself off", async ({ page }) => {
+  await openApp(page, () => { (window as any).MediaRecorder = class { static isTypeSupported() { return true; } constructor() { throw new Error("boom"); } }; });
+  await page.click("#recBtn"); await page.click("#recOk");
+  await expect(page.locator("#recBtn")).toHaveClass(/\bon\b/);
+  await start(page);
+  await expect(page.locator("#recBtn")).not.toHaveClass(/\bon\b/);
+  await expect(page.locator("#recBtn.live")).toHaveCount(0);
+  expect((await sess(page, "sA")).rec.on).toBe(false);
+});
