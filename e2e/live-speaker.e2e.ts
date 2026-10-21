@@ -206,6 +206,11 @@ test.describe.serial("live speaker identification", () => {
     for (const v of ["kal", "slt", "awb"]) await expect(chipOf(page, TL1.find((s) => s.voice === v)!.text)).toHaveText(NAMES[v]);
     // 改名后清除:回到字母,再改回来
     const kal = TL1[0].text;
+    // 点击区域比标签本身大(手机上好点):标签上方 6 px 也点得到
+    await chipOf(page, kal).evaluate((e) => e.scrollIntoView({ block: "center" }));
+    const box = (await chipOf(page, kal).boundingBox())!;
+    expect(box.height).toBeLessThan(24);
+    expect(await page.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y); return e?.closest(".lwho") ? "lwho" : e?.outerHTML.slice(0, 80); }, [box.x + 3, box.y - 6])).toBe("lwho");
     await chipOf(page, kal).click();
     await page.click("#lspkClearName");
     await expect(chipOf(page, kal)).toHaveText(String.fromCharCode(65 + voiceGroup.kal));

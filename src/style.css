@@ -437,7 +437,8 @@ body.filemode #go::before { width: 14px; height: 14px; }
 body.filemode #recBtn, body.filemode #recBar, body.filemode #recConfirm { display: none; }
 /* 实时说话人(spk/live.ts):字幕左上角的组标签(点一下起名)、起名的小菜单、存声纹 */
 .row:has(.lwho) { display: flow-root; }
-.row .who.lwho { float: left; position: relative; z-index: 1; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 4px 8px 0 0; border: 0; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.row .who.lwho { float: left; position: relative; z-index: 1; max-width: 9em; white-space: nowrap; margin: 4px 8px 0 0; border: 0; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.row .who.lwho > span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .row .who.lwho::after { content: ""; position: absolute; inset: -9px -6px; } /* 点击区域放大到约 36 px 高 */
 .row .who.lwho.ai { border: 1px dashed var(--c); }
 #lspkPick { position: fixed; z-index: 20; display: grid; gap: 8px; width: min(320px, calc(100vw - 16px)); margin: 0; padding: 12px; border-top: 3px solid var(--c); box-shadow: var(--shadow-hi); }

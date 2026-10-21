@@ -69,9 +69,9 @@ function lib(): LiveLibEntry[] { return liveLibEntries(cfg.tpl && cfg.tpl.voices
 export function paintLive(l: Line): void {
   const x = l.lspk; let w = l.el.querySelector<HTMLButtonElement>(".lwho");
   if (!x || x.g == null) { if (w) w.remove(); return; }
-  if (!w) { w = el("button", { type: "button", className: "who lwho" }); l.el.prepend(w); }
+  if (!w) { w = el("button", { type: "button", className: "who lwho" }, el("span")); l.el.prepend(w); }
   const g = x.g;
-  w.textContent = x.name || letterOf(g); w.style.setProperty("--c", color(g));
+  (w.firstElementChild || w).textContent = x.name || letterOf(g); // 名字放在里面的 span 里截断:按钮自己 overflow: hidden 会把放大的点击区域也裁掉 w.style.setProperty("--c", color(g));
   w.classList.toggle("ai", x.src === "gpt-guess"); w.title = x.src ? t("lspk.src." + x.src) : "";
   w.onclick = (e) => { e.stopPropagation(); openPick(g, w!); };
 }
