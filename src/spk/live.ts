@@ -2,7 +2,7 @@
 // 字幕从不等它:标签在声纹算完后才补上,之后重新聚类、改名时就地改 DOM。组存 IndexedDB「lspk:<会话 id>」(质心 base64),
 // 每句的标签随字幕存(saveLines 的 lg / ln / ls / lc)。spk/live-judge.ts 通过 liveSpk() 的接口读组、提名字
 import { liveAudio, onLineAudio } from "../live-audio";
-import { loadModel, embed } from "./engine";
+import { loadModel, embed, engineKind } from "./engine";
 import { SPK_DIM, spkNorm } from "./core";
 import { LIVE_SPK, LiveCore, letterOf, liveLibEntries, f32b64, b64f32 } from "./live-core";
 import type { LiveLibEntry, SavedGroups } from "./live-core";
@@ -36,6 +36,8 @@ export interface LiveSpkDeps {
   getTemplate(id: string): Template | undefined;
   putTemplate(tp: Template): void;
   isFileSess(): boolean;
+  /** 性能数字变了(信息栏刷新) */
+  onStats?(): void;
 }
 let D: LiveSpkDeps;
 
@@ -58,6 +60,16 @@ let cues: number[] = [];
 /** 测试 / 测速用:每句的标签历史(音频时钟)、积压和延迟 */
 const hist = new Map<number, { at: number; label: string | null }[]>();
 const perf = { n: 0, lagMax: 0, lagSum: 0, dropped: 0, skipped: 0, qMax: 0, embedMs: 0 };
+/** 信息栏用:本次收音最近 20 句的声纹耗时 / 标签延迟(毫秒),丢掉的句数;模型跑在哪 */
+const run = { embed: [] as number[], lag: [] as number[], lost: 0, kind: null as "worker" | "main" | null, shownAt: 0 };
+const push20 = (a: number[], v: number) => { a.push(v); if (a.length > 20) a.shift(); };
+const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+function stats() { if (D.onStats && performance.now() - run.shownAt > 500) { run.shownAt = performance.now(); D.onStats(); } }
+/** 实时说话人的性能(信息栏):这次收音开着说话人识别时才有 */
+export function liveSpkStats(): { embedMs: number | null; lagMs: number | null; lagMax: number; queue: number; lost: number; kind: "worker" | "main" | null } | null {
+  if (!running && !run.embed.length) return null;
+  return { embedMs: avg(run.embed), lagMs: avg(run.lag), lagMax: run.lag.length ? Math.max(...run.lag) : 0, queue: queue.length, lost: run.lost, kind: run.kind };
+}
 
 const clock = () => (state.running ? liveAudio.now() : clockStop);
 const color = (g: number) => SPK_COLORS[g % SPK_COLORS.length];
@@ -128,17 +140,17 @@ async function pump() {
   try {
     while (queue.length && gen === g0) {
       // 积压太多:丢掉队首结束已超过 maxLag 的(停止收音时已经切好的不丢)
-      while (queue.length && queue[0].pcm === undefined && clock() - (queue[0].line.aEnd ?? 0) > LIVE_SPK.maxLag) { queue.shift(); perf.dropped++; }
+      while (queue.length && queue[0].pcm === undefined && clock() - (queue[0].line.aEnd ?? 0) > LIVE_SPK.maxLag) { queue.shift(); perf.dropped++; run.lost++; stats(); }
       const q = queue.shift(); if (!q) break;
       const l = q.line, pcm = q.pcm === undefined ? cut(l) : q.pcm;
-      if (!pcm) { perf.skipped++; continue; } // 已经被挤出缓冲
+      if (!pcm) { perf.skipped++; run.lost++; stats(); continue; } // 已经被挤出缓冲
       if (!lines.includes(l)) continue; // 并进上一句了
       if (pcm.length < LIVE_SPK.minDur * 16000) { l.lspk = { g: null, name: null, src: null, conf: 0 }; paintLive(l); note(l); D.saveLines(); continue; }
       const t0 = performance.now();
       let vec: Float32Array;
       try { vec = await embed(pcm); } catch (e) { console.error(e); errMsg = (e as Error).message || String(e); ui(); continue; }
       if (gen !== g0) break;
-      perf.embedMs += performance.now() - t0;
+      perf.embedMs += performance.now() - t0; push20(run.embed, performance.now() - t0);
       const ids = new Set(lines.map((x) => x.id));
       for (const s of [...core.segs]) if (!ids.has(s.line)) core.drop(s.line);
       core.deferNew = lib().length > 0;
@@ -146,7 +158,8 @@ async function pump() {
       if (core.due(Date.now(), lastRecluster)) recluster();
       core.nameFromLibrary(lib());
       paintAll(); save();
-      if (state.running && l.aEnd != null) { const lag = clock() - l.aEnd; perf.n++; perf.lagSum += lag; perf.lagMax = Math.max(perf.lagMax, lag); }
+      if (state.running && l.aEnd != null) { const lag = clock() - l.aEnd; perf.n++; perf.lagSum += lag; perf.lagMax = Math.max(perf.lagMax, lag); push20(run.lag, lag); }
+      stats();
     }
     // 收音停了、队列做完:最后整体聚一次
     if (gen === g0 && !running && !queue.length && core.fresh) { recluster(); core.nameFromLibrary(lib()); paintAll(); save(); }
@@ -166,7 +179,7 @@ function ensureModel() {
   clearTimeout(retryTimer);
   loading = true; failed = false; loadPct = 0; errMsg = ""; ui();
   loadModel((p) => { loadPct = p; ui(); })
-    .then(() => { ready = true; loadFails = 0; pump(); }, (e) => {
+    .then(() => { ready = true; loadFails = 0; engineKind().then((k) => { run.kind = k; stats(); }); pump(); }, (e) => {
       console.error(e); errMsg = (e as Error).message || String(e); failed = true; queue.length = 0;
       // 退避重试几次;都失败就等下次开始收音
       const wait = LOAD_RETRY[loadFails++];
@@ -187,7 +200,7 @@ function loadGroups() {
 /** 切换会话(restoreLines 里):清掉上一个会话的状态,读回这个会话存的组 */
 export function liveSpkSession(): void {
   liveSpkFlush();
-  gen++; queue.length = 0; core = new LiveCore(); running = false; ticking(false); runLines = new Set(); cues = []; hist.clear(); savedMsg = ""; closePick();
+  gen++; queue.length = 0; core = new LiveCore(); running = false; ticking(false); runLines = new Set(); cues = []; hist.clear(); savedMsg = ""; closePick(); run.embed = []; run.lag = []; run.lost = 0;
   const ss = state.curSess; sid = ss && ss.kind !== "file" ? ss.id : null;
   lstate = sid ? 0 : 2;
   $("#lspkSaveBox").hidden = true;
@@ -197,7 +210,7 @@ export function liveSpkSession(): void {
 /** 开始收音时(开着说话人识别才真正启动;模型在后台加载) */
 export function liveSpkStart(): void {
   if (!sid || !state.curSess || state.curSess.id !== sid || !spkOn() || running) return;
-  running = true; runLines = new Set(); savedMsg = ""; $("#lspkSaveBox").hidden = true;
+  running = true; runLines = new Set(); savedMsg = ""; run.embed = []; run.lag = []; run.lost = 0; $("#lspkSaveBox").hidden = true;
   if (failed && !loading) loadFails = 0; // 上次加载失败:这次开始收音再试一轮
   loadGroups(); ensureModel(); ticking(true); ui();
 }

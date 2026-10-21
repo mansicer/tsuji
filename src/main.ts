@@ -23,7 +23,7 @@ import { initRecord, recBegin, recEnd, recUi } from "./live-record";
 import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
 import * as spkEngine from "./spk/engine";
 import { startLiveJudge, stopLiveJudge } from "./spk/live-judge";
-import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkFlush, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug } from "./spk/live";
+import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkFlush, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug, liveSpkStats } from "./spk/live";
 
 // ---------- 小工具 ----------
 // 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
@@ -350,13 +350,23 @@ function showLat() {
   const gain = state.running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
   const item = (k: string, v: string | number, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
   $("#ibItems").replaceChildren(...[
-    isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
+    isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), ...spkItems(item), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
     queue.length ? item("ib.queue", queue.length, "warn") : null,
     item("ib.lines", diag.asr), item("ib.noise", diag.noise), item("ib.err", diag.err, diag.err ? "bad" : ""),
     item("ib.cost", "$" + cost.total().toFixed(cost.total() < 1 ? 3 : 2)),
   ].filter(Boolean));
   $("#infobar").title = t("ib.deltas", { n: diag.deltas }); $("#signal").title = t("ib.level");
   showCost();
+}
+/** 实时说话人识别的性能(手机上看负担):声纹耗时、标签延迟,有积压 / 丢句时才显示;排在识别后面,手机窄屏不用横划就能看到 */
+function spkItems(item: (k: string, v: string | number, cls?: string) => HTMLElement): (HTMLElement | null)[] {
+  const s = isFileSess() ? null : liveSpkStats();
+  if (!s) return [];
+  const e = item("ib.spk", s.embedMs == null ? "—" : t("ms", { ms: Math.round(s.embedMs) }));
+  e.title = t("ib.spkTip", { where: s.kind ? t("ib." + s.kind) : "—" });
+  const l = item("ib.spkLag", s.lagMs == null ? "—" : fmtS(s.lagMs), s.lagMs != null && s.lagMs > 5000 ? "warn" : "");
+  l.title = t("ib.spkLagTip", { max: fmtS(s.lagMax) });
+  return [e, l, s.queue > 1 ? item("ib.spkQ", s.queue, "warn") : null, s.lost ? item("ib.spkLost", s.lost, "warn") : null];
 }
 // 费用估算(单价和计算见 cost.ts)
 const cost = {
@@ -844,7 +854,7 @@ $("#expVtt").onclick = () => download(fileName(state.curSess!.name) + ".vtt", ma
 
 // ---------- 说话人识别(在 speaker-ui.ts) ----------
 initSpeaker({ sget, sset, fileJob, pcmCb, fileProgress, isFileSess, seekTo, saveLines, getTemplate, putTemplate, applySettings, apiHeaders, addMtCost, openSettings, onToggle: liveSpkToggle });
-initLiveSpk({ saveLines, getTemplate, putTemplate, isFileSess });
+initLiveSpk({ saveLines, getTemplate, putTemplate, isFileSess, onStats: showLat });
 
 // ---------- 模板列表 ----------
 function renderHome() {

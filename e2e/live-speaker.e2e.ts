@@ -156,6 +156,10 @@ test.describe.serial("live speaker identification", () => {
     console.log(`embed backlog: ${perf.n} lines embedded while listening, aEnd → label lag max ${(perf.lagMax / 1000).toFixed(2)} s, mean ${(perf.lagSum / perf.n / 1000).toFixed(2)} s; queue max ${perf.qMax}; dropped ${perf.dropped}, skipped ${perf.skipped}; embed time ${(perf.embedMs / perf.n).toFixed(0)} ms/line`);
     expect(r.accuracy!).toBeGreaterThanOrEqual(0.9);
     expect(rl.coverage!).toBeGreaterThanOrEqual(0.7);
+    // 信息栏显示声纹耗时和标签延迟(手机上看负担)
+    await expect(page.locator("#ibItems")).toContainText(/Voiceprint\s*\d+ ms/);
+    await expect(page.locator("#ibItems")).toContainText(/Tag delay\s*\d+\.\ds/);
+    expect(await page.locator("#ibItems .ib", { hasText: "Voiceprint" }).getAttribute("title")).toContain("background thread");
     // 每个人最后都只在一个组里,三个人三个组
     for (const s of r.speakers) expect(Object.keys(s.as)).toHaveLength(1);
     const gs = await groups(page);
