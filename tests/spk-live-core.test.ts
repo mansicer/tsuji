@@ -76,43 +76,19 @@ describe("major groups", () => {
     c.add(101, 0.6, mix(b, randVec(), 0.6), 21);
     return c;
   }
-  it("with clear voices, a small group that sounds different keeps its own label", () => {
-    const c = setup(); // 主要组成员和质心约 0.95,门槛约 0.75;小组只有 0.55 像 a
+  it("a small group and a stray short segment are shown as the nearest major group", () => {
+    const c = setup();
     expect(c.visible().map((g) => g.id)).toEqual([0, 1, 2]);
     expect(c.majors()!.map((g) => g.id)).toEqual([0, 1]);
-    expect(c.plan().shown.map((g) => g.id)).toEqual([0, 1, 2]);
-    expect(c.label(100)!.g).toBe(2);
-    expect(c.plan().bar.get(0)!).toBeGreaterThan(0.7);
-  });
-  it("with hard-to-separate voices, fragments are shown as the nearest major group", () => {
-    // 噪声大(两段之间余弦约 0.65,刚好卡在并组门槛 0.62 附近):在线分组拆出碎组,主要组的门槛跟着降到 0.6 左右,碎组归回主要组
-    const a = randVec(), b = randVec(), c = new LiveCore(), who: number[] = [];
-    for (let i = 0; i < 60; i++) { who[i] = i % 2; c.add(i, 3, seg(who[i] ? b : a, 0.75), i); if (i % 10 === 9) c.recluster(i); }
-    const P = c.plan(), raw = c.visible().length;
-    expect(raw).toBeGreaterThan(2);
-    expect(P.majors!.length).toBe(2);
-    expect(P.shown.length).toBe(2);
-    expect(Math.max(...P.bar.values())).toBeLessThan(0.65);
-    const lab = who.map((_, i) => c.label(i, P)!.g), map = new Map(P.majors!.map((m) => [m.id, who[lab.indexOf(m.id)]]));
-    const ok = who.filter((w, i) => lab[i] != null && map.get(lab[i]!) === w).length;
-    expect(ok / who.length).toBeGreaterThanOrEqual(0.9);
-  });
-  it("a stray short segment goes to a major group only if it is as close as that group's own lines", () => {
-    const c = setup(), b = c.visible()[1].cent;
-    c.add(102, 0.6, seg(b, 0.3), 23);
-    expect(c.label(102)!.g).toBe(1);
-    expect(c.label(101)!.g).toBeNull(); // 0.55 像 b:不够近
+    expect(c.seg(100)!.g).toBe(2);
+    expect(labels(c, [100, 101])).toEqual([0, 1]);
+    expect(c.label(100)!.conf).toBeGreaterThan(LIVE_SPK.majorSim);
   });
   it("a small group named by the user or the library stays major", () => {
     const c = setup();
     c.rename(2, "Guest");
     expect(c.majors()!.map((g) => g.id)).toEqual([0, 1, 2]);
     expect(c.label(100)!.g).toBe(2);
-  });
-  it("too few lines in a major group: the bar falls back to 1 - dist - majorRel", () => {
-    const a = randVec(), c = new LiveCore();
-    for (let i = 0; i < 3; i++) c.add(i, 4, seg(a, 0.3), i);
-    expect(c.plan().bar.get(0)).toBeCloseTo(1 - LIVE_SPK.dist - LIVE_SPK.majorRel, 6);
   });
   it("a small group unlike every major group keeps its own label", () => {
     const c = setup();
@@ -127,6 +103,20 @@ describe("major groups", () => {
     expect(c.visible()).toHaveLength(12);
     expect(c.majors()).toBeNull();
     expect(labels(c, [0, 5, 11])).toEqual([0, 5, 11]);
+  });
+  it("a quiet speaker is shown as a major group until the user confirms them as someone else", () => {
+    // 不同人的余弦也常常过 0.3:只说了几句的人先被归到最像的主要组;「只改这一句 → 另一个人」确认后他的句子都单独显示,之后的也是
+    const common = randVec(), sp = [0, 1, 2].map(() => mix(common, randVec(), 0.55)), c = new LiveCore(), quiet: number[] = [];
+    for (let i = 0; i < 60; i++) { const k = i % 12 === 0 ? 2 : i % 2; if (k === 2) quiet.push(i); c.add(i, 4, seg(sp[k], 0.3), i); if (i % 10 === 9) c.recluster(i); }
+    const own = c.seg(quiet[0])!.g!;
+    expect(quiet.every((l) => c.seg(l)!.g === own)).toBe(true); // 分组本身没错
+    expect(c.majors()!.map((g) => g.id)).not.toContain(own);
+    expect(quiet.every((l) => c.label(l)!.g !== own)).toBe(true); // 但显示成了别人
+    expect(c.pin(quiet[1], "new", 100)).toBe(own);
+    expect(quiet.map((l) => c.label(l)!.g)).toEqual(quiet.map(() => own));
+    c.add(200, 4, seg(sp[2], 0.3), 101);
+    c.recluster(102);
+    expect(c.label(200)!.g).toBe(own);
   });
 });
 
@@ -163,17 +153,6 @@ describe("correcting a line (pin)", () => {
     expect(c.label(51)!.g).toBe(2);
     c.recluster(33);
     expect([c.label(50)!.g, c.label(51)!.g]).toEqual([2, 2]);
-  });
-  it("another person, on a line whose small group was shown as a major group: that small group is confirmed", () => {
-    // 声音难分:小组本来归到主要组;用户说「另一个人」就确认这个小组,它的其他句子也跟着显示成它
-    const a = randVec(), b = randVec(), c = new LiveCore();
-    for (let i = 0; i < 60; i++) { c.add(i, 3, seg(i % 2 ? b : a, 0.75), i); if (i % 10 === 9) c.recluster(i); }
-    const P = c.plan(), minor = [...P.to].find(([, t]) => t != null)!;
-    const lines = c.segs.filter((x) => x.g === minor[0]).map((x) => x.line);
-    expect(lines.every((l) => c.label(l, P)!.g === minor[1])).toBe(true);
-    expect(c.pin(lines[0], "new", 100)).toBe(minor[0]);
-    expect(c.group(minor[0])!.ok).toBe(true);
-    expect(lines.map((l) => c.label(l)!.g)).toEqual(lines.map(() => minor[0]));
   });
   it("a confirmed group survives save and load; a line added again keeps its pin", () => {
     const { a, c } = setup();

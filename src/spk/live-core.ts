@@ -22,12 +22,10 @@ export const LIVE_SPK = {
   libLive: 0.80, libFile: 0.70, libMargin: 0.08, libDur: 4,
   /**
    * 主要的组:已显示、时长 ≥ 全部已显示组的 majorFrac(或已由声纹库 / 用户起名、用户确认过)。它们加起来 ≥ majorCover 时,
-   * 其余小组和没跟上组的短片段,和最近的主要组够像才归过去;分得太碎(主要组不够)时不归并。
-   * 「够像」随音频自适应:主要组自己成员和它质心的余弦取 majorQ 分位,减 majorRel,不低于 majorSim。
-   * 声音难分(背景音乐、声线接近)时组内本来就只有 0.5 左右,门槛跟着低,碎片能并回去;
-   * 声音清楚时组内 0.8 以上,只说了几句、声音明显不同的人保留自己的标签。成员不够 majorMinN 段时用 1 - dist - majorRel
+   * 其余小组和没跟上组的短片段都按声纹归到最近的主要组(余弦 ≥ majorSim);分得太碎(主要组不够)时不归并。
+   * 只说了几句的人也会被归走(不同人的余弦常常也过 0.3),要用户「只改这一句 → 另一个人」确认后才单独显示
    */
-  majorFrac: 0.1, majorCover: 0.3, majorSim: 0.3, majorQ: 0.25, majorRel: 0.2, majorMinN: 5,
+  majorFrac: 0.1, majorCover: 0.3, majorSim: 0.3,
   /** 整体重新聚类:每 reclusterMs 毫秒或每 reclusterN 个新片段一次,只取最近 keep 段 */
   reclusterMs: 30_000, reclusterN: 10, keep: 400,
   /** 积压:队首的句子结束已超过这么久(毫秒)就丢掉,不让流水线越拖越远 */
@@ -54,8 +52,6 @@ export interface CoreGroup {
   /** 用户确认过是单独一个人(「只改这一句」指到它):算主要的组,不并到别的组 */
   ok?: boolean;
 }
-/** 标签怎么显示(LiveCore.plan):主要的组、小组归到哪(null = 用自己的标签)、各主要组的归并门槛 */
-export interface LivePlan { majors: CoreGroup[] | null; shown: CoreGroup[]; to: Map<number, number | null>; bar: Map<number, number> }
 export interface CoreEvent { kind: "new-group" | "merge" | "split"; at: number; id: number; other?: number }
 /** 存进 IndexedDB 的组(质心 base64) */
 export interface SavedGroups { next: number; groups: { id: number; name: string | null; src: NameSrc | null; cent: string; dur: number; n: number; ok?: boolean }[] }
@@ -179,55 +175,21 @@ export class LiveCore {
     const M = vis.filter((g) => g.dur >= this.C.majorFrac * tot || g.src === "library" || g.src === "manual" || g.ok);
     return M.length && M.reduce((a, g) => a + g.dur, 0) >= this.C.majorCover * tot ? M : null;
   }
-  /** 主要组 m 的归并门槛(LIVE_SPK.majorQ / majorRel) */
-  private bar(m: CoreGroup): number {
-    const C = this.C, x: number[] = [];
-    for (const s of this.segs) if (s.member && s.g === m.id) x.push(spkDot(s.vec, m.cent));
-    const q = x.length >= C.majorMinN ? x.sort((a, b) => a - b)[Math.floor(C.majorQ * (x.length - 1))] : 1 - C.dist;
-    return Math.max(C.majorSim, q - C.majorRel);
-  }
-  /** 最像的主要组 */
-  private nearMajor(v: Float32Array, majors: CoreGroup[]): { m: CoreGroup; s: number } | null {
-    let best: { m: CoreGroup; s: number } | null = null;
-    for (const m of majors) { const s = spkDot(v, m.cent); if (!best || s > best.s) best = { m, s }; }
-    return best;
-  }
-  /**
-   * 现在怎么显示标签:小组整组决定(成员和最像的主要组的余弦取中位数,过了那个组的门槛就整组归过去,否则用自己的标签),
-   * 免得一个人的几句一会儿是自己、一会儿是别人
-   */
-  plan(): LivePlan {
-    const majors = this.majors(), vis = this.visible(), to = new Map<number, number | null>(), bar = new Map<number, number>();
-    if (!majors) return { majors, shown: vis, to, bar };
-    for (const m of majors) bar.set(m.id, this.bar(m));
-    const P: LivePlan = { majors, shown: [], to, bar };
-    for (const g of vis) {
-      if (majors.includes(g)) continue;
-      const near = this.nearMajor(g.cent, majors), sims: number[] = [];
-      if (near) for (const s of this.segs) if (s.member && s.g === g.id) sims.push(spkDot(s.vec, near.m.cent));
-      const med = sims.length ? sims.sort((a, b) => a - b)[Math.floor((sims.length - 1) / 2)] : near ? near.s : -2;
-      to.set(g.id, near && med >= bar.get(near.m.id)! ? near.m.id : null);
-    }
-    P.shown = vis.filter((g) => majors.includes(g) || to.get(g.id) === null);
-    return P;
-  }
-  /** 这句现在的标签:用户指定的组优先;小组按 plan 归并;没跟上组的短片段归到够像的主要组,都不够时 g = null。P:调用方算好的 plan() */
-  label(line: number, P: LivePlan = this.plan()): { g: number | null; conf: number } | null {
+  /** 这句现在的标签:用户指定的组优先;小组、没跟上组的短片段归到最近的主要组;都不够近时 g = null。M:调用方算好的 majors() */
+  label(line: number, M: CoreGroup[] | null = this.majors()): { g: number | null; conf: number } | null {
     const s = this.byLine.get(line); if (!s) return null;
     const r = (x: number) => Math.round(x * 1000) / 1000, pg = s.pin != null ? this.gs.get(s.pin) : undefined;
     if (pg) return { g: pg.id, conf: r(spkDot(s.vec, pg.cent)) };
     const g = this.group(s.g);
-    if (P.majors && g && g.visible && !P.majors.includes(g)) {
-      const t = this.group(P.to.get(g.id));
-      if (t) return { g: t.id, conf: r(spkDot(s.vec, t.cent)) };
-    } else if (P.majors && !(g && g.visible)) {
-      const near = this.nearMajor(s.vec, P.majors);
-      if (near && near.s >= P.bar.get(near.m.id)!) return { g: near.m.id, conf: r(near.s) };
+    if (M && !(g && M.includes(g))) {
+      let best: CoreGroup | null = null, bs = this.C.majorSim;
+      for (const m of M) { const x = spkDot(s.vec, m.cent); if (x >= bs) { bs = x; best = m; } }
+      if (best) return { g: best.id, conf: r(bs) };
     }
     return g && g.visible ? { g: g.id, conf: r(spkDot(s.vec, g.cent)) } : { g: null, conf: r(s.sim) };
   }
   /**
-   * 用户纠正这一句(「只改这一句」):to = 组号,或 "new" = 另一个人。"new" 时这句原来就在一个没并进主要组的小组里就确认那个组,
+   * 用户纠正这一句(「只改这一句」):to = 组号,或 "new" = 另一个人。"new" 时这句原来在一个小组里(被归到了主要组)就确认那个组,
    * 否则用这句开一个新组。被指到的组标成用户确认过(ok):算主要的组、不会被归并;这句的声纹算进去,之后的句子按它分组。
    * 返回这句现在的组号
    */
@@ -236,8 +198,8 @@ export class LiveCore {
     const own = s.member ? this.group(s.g) : undefined;
     let g = to === "new" ? undefined : this.gs.get(to);
     if (to === "new") {
-      const P = this.plan();
-      if (own && own.visible && own.id !== s.pin && P.majors && !P.majors.includes(own) && P.to.get(own.id) != null) g = own;
+      const M = this.majors();
+      if (own && own.visible && own.id !== s.pin && M && !M.includes(own)) g = own;
     } else if (!g || !g.visible) return null;
     if (!g || g !== own) {
       if (s.member) this.detach(s);

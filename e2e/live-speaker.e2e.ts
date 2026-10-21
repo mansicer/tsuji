@@ -177,6 +177,7 @@ test.describe.serial("live speaker identification", () => {
     expect(api.ev.filter((k: string) => k === "new-group")).toHaveLength(3);
     // 标签就在字幕行上
     await expect(chipOf(page, CONV1[0].text)).toHaveText(String.fromCharCode(65 + voiceGroup.kal));
+    expect(await chipOf(page, CONV1[0].text).evaluate((e) => (e as HTMLElement).style.getPropertyValue("--c"))).toMatch(/^#/); // 每组一个颜色
     await page.click("#go"); // 停止
     await expect(page.locator("#go")).not.toHaveClass(/stop/);
   });
