@@ -67,6 +67,45 @@ describe("online assignment", () => {
   });
 });
 
+describe("major groups", () => {
+  /** 两个人各 6 段 4 秒;另有一段和 a 有点像(余弦约 0.55,够不上并组)的 3.5 秒 → 自成一个小组;一段和 b 有点像的 0.6 秒短片段 */
+  function setup() {
+    const a = randVec(), b = randVec(), c = new LiveCore();
+    for (let i = 0; i < 12; i++) c.add(i, 4, seg(i % 2 ? b : a, 0.3), i);
+    c.add(100, 3.5, mix(a, randVec(), 0.6), 20);
+    c.add(101, 0.6, mix(b, randVec(), 0.6), 21);
+    return c;
+  }
+  it("a small group and a stray short segment are shown as the nearest major group", () => {
+    const c = setup();
+    expect(c.visible().map((g) => g.id)).toEqual([0, 1, 2]);
+    expect(c.majors()!.map((g) => g.id)).toEqual([0, 1]);
+    expect(c.seg(100)!.g).toBe(2);
+    expect(labels(c, [100, 101])).toEqual([0, 1]);
+    expect(c.label(100)!.conf).toBeGreaterThan(LIVE_SPK.majorSim);
+  });
+  it("a small group named by the user or the library stays major", () => {
+    const c = setup();
+    c.rename(2, "Guest");
+    expect(c.majors()!.map((g) => g.id)).toEqual([0, 1, 2]);
+    expect(c.label(100)!.g).toBe(2);
+  });
+  it("a small group unlike every major group keeps its own label", () => {
+    const c = setup();
+    c.add(102, 3.5, randVec(), 22);
+    const g = c.seg(102)!.g!;
+    expect(c.majors()!.map((x) => x.id)).not.toContain(g);
+    expect(c.label(102)!.g).toBe(g);
+  });
+  it("no remapping when the groups are too fragmented (no group reaches majorFrac)", () => {
+    const c = new LiveCore();
+    for (let i = 0; i < 12; i++) c.add(i, 4, randVec(), i);
+    expect(c.visible()).toHaveLength(12);
+    expect(c.majors()).toBeNull();
+    expect(labels(c, [0, 5, 11])).toEqual([0, 5, 11]);
+  });
+});
+
 describe("recluster", () => {
   it("keeps ids, letters and names when nothing changed", () => {
     const sp = [randVec(), randVec(), randVec()], c = new LiveCore();
@@ -156,6 +195,30 @@ describe("persistence", () => {
     // 新来的第三个人:id 接着往下排
     d.add(20, 4, seg(randVec()), 200);
     expect(d.label(20)!.g).toBe(2);
+  });
+});
+
+describe("GPT names", () => {
+  function two() { const a = randVec(), b = randVec(), c = new LiveCore(); for (let i = 0; i < 4; i++) c.add(i, 4, seg(i % 2 ? b : a, 0.3), i); return c; }
+  const names = (c: LiveCore) => c.visible().map((g) => g.name);
+  it("a GPT name another group already holds is not given to a second group", () => {
+    const c = two();
+    c.propose([{ id: 0, name: "Hina", src: "gpt-evidence" }, { id: 1, name: "Koko", src: "gpt-evidence" }]);
+    expect(c.propose([{ id: 0, name: "Koko", src: "gpt-evidence" }])).toEqual([]);
+    expect(c.propose([{ id: 0, name: "Koko", src: "gpt-guess" }])).toEqual([]);
+    expect(names(c)).toEqual(["Hina", "Koko"]);
+  });
+  it("swapping in one batch is allowed", () => {
+    const c = two();
+    c.propose([{ id: 0, name: "Hina", src: "gpt-evidence" }, { id: 1, name: "Koko", src: "gpt-evidence" }]);
+    expect(c.propose([{ id: 0, name: "Koko", src: "gpt-evidence" }, { id: 1, name: "Hina", src: "gpt-evidence" }])).toHaveLength(2);
+    expect(names(c)).toEqual(["Koko", "Hina"]);
+  });
+  it("evidence takes a name from a guess, and the guess loses it", () => {
+    const c = two();
+    c.propose([{ id: 1, name: "Koko", src: "gpt-guess" }]);
+    c.propose([{ id: 0, name: "Koko", src: "gpt-evidence" }]);
+    expect(names(c)).toEqual(["Koko", null]);
   });
 });
 

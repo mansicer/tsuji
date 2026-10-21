@@ -8,6 +8,12 @@ const SR = 24000, PAD = 12; // PAD:重采样核半宽,切片两头多取一点,�
 export const GUESS_MARGIN = 600;
 /** 强制断句等 committed 的期限;没等到(服务端缓冲已空、报错)就作废 */
 const FORCED_TTL = 10000, ITEM_TTL = 60000;
+/**
+ * 开着说话人识别时的停顿断句(VAD 模型):一句说满 minTurn 毫秒后,最近 gap 毫秒的能量都不高于
+ * 「最近 hist 毫秒能量的 20% 分位 + rel dB」、也不高于「中位数 − drop dB」就强制断句(后一条防一直很响、没有起伏的声音每句都切)。
+ * 背景音乐下服务端 VAD 不断句,只靠 maxTurn 一刀刀切会把几个人切进一句
+ */
+export const PAUSE = { minTurn: 2000, gap: 200, rel: 10, drop: 5, hist: 10_000 };
 
 /** Realtime 服务端事件里用到的字段 */
 export interface RtEvent { type: string; item_id?: string; audio_start_ms?: number; audio_end_ms?: number }
@@ -128,6 +134,17 @@ export class LiveAudio {
       out.push([Math.round(a), Math.round(s + (e - s) * (tot ? acc / tot : (out.length + 1) / w.length))]);
     }
     return out;
+  }
+  /** 现在是不是在停顿里(PAUSE) */
+  paused(gap = PAUSE.gap, rel = PAUSE.rel, drop = PAUSE.drop, hist = PAUSE.hist): boolean {
+    const F = SR / 50, to = this.now(), g = Math.round(gap / 20);
+    const pcm = this.pcm(to - Math.min(hist, to - this.oldest()), to), n = pcm ? Math.floor(pcm.length / F) : 0;
+    if (!pcm || n < g * 3) return false;
+    const db = new Float32Array(n);
+    for (let i = 0; i < n; i++) { let s = 0; const o = pcm.length - (n - i) * F; for (let j = o; j < o + F; j++) { const v = pcm[j] / 32768; s += v * v; } db[i] = 10 * Math.log10(s / F + 1e-12); }
+    const q = Float32Array.from(db).sort(), th = Math.min(q[Math.floor(n * 0.2)] + rel, q[Math.floor(n * 0.5)] - drop);
+    for (let i = n - g; i < n; i++) if (db[i] > th) return false;
+    return true;
   }
   /** 停止收音:时钟归零、清空缓冲 */
   stop(): void { this.total = 0; this.connAt = 0; this.lastEnd = 0; this.items = {}; this.forcedAt = []; this.commitEnd = null; }

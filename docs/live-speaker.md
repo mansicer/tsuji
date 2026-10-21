@@ -109,12 +109,21 @@ Measured with real CAM++ on 4 flite voices. Full report from the engine agent: w
 - segments shorter than 1.0 s are not clustered; they take the nearest visible group if its similarity is ≥ 0.55, otherwise no label;
 - library match per entry source: a `live` alt needs ≥ 0.80; a file `v` / `file` alt needs ≥ 0.70. Both need a margin of ≥ 0.08 over the second-best entry and a mutual best against the other groups' centroids. A group is matched only once it has ≥ 4 s of speech;
 - full recluster of all retained segment vectors (the last 400) every 30 s or every 10 new segments. New clusters map to old group ids by membership overlap (Hungarian), so letters and names stay stable. The recluster reports `merge` / `split` events.
+- *major groups*: a visible group is major when it holds ≥ 10 % of all visible speech, or was named by the user or the library. When the major groups hold ≥ 30 % of the speech, lines in a minor group and short segments without a group are shown as the nearest major group (cosine ≥ 0.3). Otherwise the groups are too fragmented and nothing is remapped. Only major groups are sent to the GPT judge;
+- *pause cuts* (VAD models only, with speaker identification on): after ≥ 2 s of a turn, the client forces a commit as soon as the last 200 ms are a pause. A pause means every 20 ms frame is at most the 20th percentile of the last 10 s + 10 dB, and at most the median − 5 dB. Under background music the server VAD hardly ever ends a turn, so without this every line ran to `maxTurn` and mixed several speakers.
+- *GPT names*: a name that another group already holds at the same or a higher source is not given to a second group, unless the same batch also renames that holder (a swap). A higher-ranked GPT name takes the name from a lower-ranked holder, and the holder loses it. Without this rule, GPT moved one name back and forth between two groups, and every move relabelled all of their lines.
+
+Re-measured on 10 minutes of a real three-person radio show with background music (MyGO!!!!!「迷子集会」#200; all three are young female voices). Here CAM++ separates the voices far less than on flite: 2 s windows of the same speaker have a median similarity of 0.56, different speakers 0.37. An offline replay of the recorded line boundaries scores one-to-one accuracy as follows. Major groups raise streaming `gpt-live-transcribe` from 70.7 % (coverage 72 %) to 80.6 % (coverage 98 %). Simulated pause cuts on the `gpt-transcribe` run raise it from 67 % to 86 %, at coverage ≥ 99 %. Some things did not help on this audio:
+- splitting lines into 1.5–3 s windows and clustering those;
+- detecting speaker changes from adjacent windows;
+- mean-centering the embeddings;
+- padding short lines to 1.5 s.
 
 ### `spk/live.ts` API (consumed by `spk/live-judge.ts` and the UI)
 ```ts
 export interface LiveGroup { id: number; letter: string; name: string | null; src: NameSrc | null; cent: Float32Array; dur: number; n: number; visible: boolean }
 export interface LiveSpkApi {
-  groups(): LiveGroup[];                                  // visible groups only
+  groups(): LiveGroup[];                                  // major groups (all visible groups when too fragmented)
   linesSince(at: number): { id: number; text: string; g: number | null; aStart: number }[]; // live lines with aStart >= at
   uncertain(): number;                                   // live lines with speech but no group label
   events(): { kind: "new-group" | "merge" | "split" | "cue"; at: number }[]; // last hour, wall-clock ms

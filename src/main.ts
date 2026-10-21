@@ -18,7 +18,7 @@ import { $, el, flash, flashBtn, download } from "./dom";
 import { initSessions, saveSessions, sget, sset, sessTemplate, newSession, useSession, refreshTemplate, migrateToSessions, fileName, renderSessions } from "./sessions";
 import { initTranslate, pumpTranslate, apiHeaders, loadMemo, setMemo } from "./translate";
 import { creator, openCreator, renderCreator, initCreator } from "./creator";
-import { liveAudio, lineAudio } from "./live-audio";
+import { liveAudio, lineAudio, PAUSE } from "./live-audio";
 import { initRecord, recBegin, recEnd, recUi } from "./live-record";
 import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow, spkBtnUi } from "./speaker-ui";
 import * as spkEngine from "./spk/engine";
@@ -389,13 +389,15 @@ function addMtCost(model: string, u: Usage | null | undefined, extra = 0): void 
   cost.mt += usd;
   cost.save(); showLat();
 }
+// 开着说话人识别时还在停顿处断句(PAUSE):一句里尽量只有一个人
 setInterval(() => {
   if (!state.running || isStreamingAsr() || !speechSince || !state.ws || state.ws.readyState !== 1) return;
-  if (performance.now() - speechSince > cfg.maxTurn * 1000) {
+  const len = performance.now() - speechSince;
+  if (len > cfg.maxTurn * 1000 || (spkOn() && len >= PAUSE.minTurn && liveAudio.paused())) {
     speechSince = performance.now();
     state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" })); liveAudio.forced();
   }
-}, 250);
+}, 100);
 function connect() {
   const url = cfg.apiBase.replace(/^http/, "ws") + "/realtime?intent=transcription";
   setStatus("status.connecting", "warn");

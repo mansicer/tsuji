@@ -20,6 +20,11 @@ export const LIVE_SPK = {
   maxSeg: 10,
   /** 声纹库:live 声纹要 ≥ libLive,文件声纹(v / file alts)要 ≥ libFile;比第二像的人高 libMargin;组累计 ≥ libDur 秒才对照 */
   libLive: 0.80, libFile: 0.70, libMargin: 0.08, libDur: 4,
+  /**
+   * 主要的组:已显示、时长 ≥ 全部已显示组的 majorFrac(或已由声纹库 / 用户起名)。它们加起来 ≥ majorCover 时,
+   * 其余小组和没跟上组的短片段都按声纹归到最近的主要组(余弦 ≥ majorSim);分得太碎(主要组不够)时不归并
+   */
+  majorFrac: 0.1, majorCover: 0.3, majorSim: 0.3,
   /** 整体重新聚类:每 reclusterMs 毫秒或每 reclusterN 个新片段一次,只取最近 keep 段 */
   reclusterMs: 30_000, reclusterN: 10, keep: 400,
   /** 积压:队首的句子结束已超过这么久(毫秒)就丢掉,不让流水线越拖越远 */
@@ -155,11 +160,22 @@ export class LiveCore {
   }
   /** 这句已经不在了(并进上一句):去掉它的片段 */
   drop(line: number): void { const s = this.byLine.get(line); if (!s) return; this.detach(s); this.segs.splice(this.segs.indexOf(s), 1); this.byLine.delete(line); }
-  /** 这句现在的标签:组没显示或短片段没跟上任何组时 g = null */
-  label(line: number): { g: number | null; conf: number } | null {
+  /** 主要的组(LIVE_SPK.majorFrac);分得太碎时为 null(不归并) */
+  majors(): CoreGroup[] | null {
+    const vis = this.visible(), tot = vis.reduce((a, g) => a + g.dur, 0);
+    const M = vis.filter((g) => g.dur >= this.C.majorFrac * tot || g.src === "library" || g.src === "manual");
+    return M.length && M.reduce((a, g) => a + g.dur, 0) >= this.C.majorCover * tot ? M : null;
+  }
+  /** 这句现在的标签:小组、没跟上组的短片段归到最近的主要组;都不够近时 g = null。M:调用方算好的 majors() */
+  label(line: number, M: CoreGroup[] | null = this.majors()): { g: number | null; conf: number } | null {
     const s = this.byLine.get(line); if (!s) return null;
-    const g = this.group(s.g);
-    return g && g.visible ? { g: g.id, conf: Math.round(spkDot(s.vec, g.cent) * 1000) / 1000 } : { g: null, conf: Math.round(s.sim * 1000) / 1000 };
+    const g = this.group(s.g), r = (x: number) => Math.round(x * 1000) / 1000;
+    if (M && !(g && M.includes(g))) {
+      let best: CoreGroup | null = null, bs = this.C.majorSim;
+      for (const m of M) { const x = spkDot(s.vec, m.cent); if (x >= bs) { bs = x; best = m; } }
+      if (best) return { g: best.id, conf: r(bs) };
+    }
+    return g && g.visible ? { g: g.id, conf: r(spkDot(s.vec, g.cent)) } : { g: null, conf: r(s.sim) };
   }
   due(now: number, last: number): boolean { return this.fresh > 0 && (this.fresh >= this.C.reclusterN || now - last >= this.C.reclusterMs); }
 
@@ -230,9 +246,14 @@ export class LiveCore {
 
   /** 按优先级改名(GPT、声纹库);返回改动。别的组已经用 library / manual 占着的名字,来源更低的不能再给 */
   propose(p: NameProposal[]): NameChange[] {
-    const vis = this.visible(), held = (x: NameProposal) => vis.some((g) => g.id !== x.id && sameName(g.name, x.name) && g.src && RANK[g.src] >= RANK.library && RANK[x.src] < RANK[g.src]);
+    // 名字已被别的组占着:那个组是 library / manual 且来源更高,或者来源不低于这次提案(GPT 不能把同一个名字给第二个组,
+    // 否则两组同名、下一轮又改回去,标签来回翻);同一批里那个组也改了名(GPT 整体纠正)不算占着
+    const vis = this.visible(), moved = (id: number, nm: string) => p.some((y) => y.id === id && !sameName(y.name, nm));
+    const held = (x: NameProposal) => vis.some((g) => g.id !== x.id && sameName(g.name, x.name) && g.src && RANK[x.src] <= RANK[g.src] && (RANK[g.src] >= RANK.library ? RANK[x.src] < RANK[g.src] : !moved(g.id, x.name)));
     const r = applyNames(vis.map((g) => ({ id: g.id, dur: g.dur, name: g.name, src: g.src })), p.filter((x) => !held(x)));
     for (const c of r.changes) { const g = this.gs.get(c.id)!; g.name = c.to.name; g.src = c.to.src; }
+    // 来源更高的 GPT 名字拿走了别的组的同名:那个组的低来源同名清掉(声纹库的同类处理在 nameFromLibrary)
+    for (const c of r.changes) for (const g of vis) if (g.id !== c.id && sameName(g.name, c.to.name) && g.src && RANK[g.src] < RANK[c.to.src] && RANK[g.src] < RANK.library && !r.changes.some((d) => d.id === g.id)) { g.name = null; g.src = null; }
     return r.changes;
   }
   /** 用户改名:直接写(manual 锁定,只有用户自己能改);name = null 清掉 */

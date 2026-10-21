@@ -89,9 +89,9 @@ export function paintLive(l: Line): void {
 }
 /** 按当前分组刷新每行的标签,有变化才改 DOM 和存储 */
 function paintAll() {
-  let dirty = false;
+  let dirty = false; const M = core.majors();
   for (const l of lines) {
-    const lab = core.label(l.id), old = l.lspk;
+    const lab = core.label(l.id, M), old = l.lspk;
     let nx: LiveLabel | undefined = old;
     if (lab) { const g = core.group(lab.g); nx = { g: lab.g, name: g ? g.name : null, src: g ? g.src : null, conf: lab.conf }; }
     else if (old && old.g != null) { const g = core.group(old.g); if (g) nx = { ...old, name: g.name, src: g.src }; } // 以前的行(刷新前、上次收音)
@@ -243,7 +243,7 @@ export function liveSpkPrefix(l: Line): string {
 
 // ---------- 接口 ----------
 const api: LiveSpkApi = {
-  groups: () => core.visible().map((g) => ({ id: g.id, letter: letterOf(g.id), name: g.name, src: g.src, cent: g.cent, dur: g.dur, n: g.n, visible: true })),
+  groups: () => (core.majors() || core.visible()).map((g) => ({ id: g.id, letter: letterOf(g.id), name: g.name, src: g.src, cent: g.cent, dur: g.dur, n: g.n, visible: true })),
   linesSince(at) {
     const cur = new Set(lines);
     return [...runLines].filter((l) => cur.has(l) && l.aStart != null && l.aStart >= at).sort((a, b) => a.aStart! - b.aStart!)

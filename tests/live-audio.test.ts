@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { LiveAudio, onLineAudio, lineAudio, GUESS_MARGIN } from "../src/live-audio";
+import { LiveAudio, onLineAudio, lineAudio, GUESS_MARGIN, PAUSE } from "../src/live-audio";
 import type { Line } from "../src/state";
 
 const CH = 2400; // 100 ms @ 24 kHz
@@ -235,5 +235,31 @@ describe("onLineAudio", () => {
     off();
     lineAudio({ id: 8 } as Line);
     expect(got).toEqual([7]);
+  });
+});
+
+describe("LiveAudio.paused", () => {
+  /** 10 秒「说话」:每秒 7 块响(正弦)、3 块很轻(底噪),最后 tail 块很轻 */
+  function talk(tail: number) {
+    const a = new LiveAudio(60);
+    for (let i = 0; i < 100; i++) a.push(chunk(i % 10 < 7 ? 8000 : 100));
+    for (let i = 0; i < 7; i++) a.push(chunk(8000));
+    for (let i = 0; i < tail; i++) a.push(chunk(100));
+    return a;
+  }
+  it("is true once the last gap ms are quiet relative to the recent level", () => {
+    expect(PAUSE.gap).toBe(200);
+    expect(talk(0).paused()).toBe(false);
+    expect(talk(1).paused()).toBe(false); // 只停了 100 ms
+    expect(talk(2).paused()).toBe(true);
+    const a = talk(2); a.push(chunk(8000)); expect(a.paused()).toBe(false); // 又开口了
+  });
+  it("never fires on a steady loud signal without dips, nor with too little audio", () => {
+    const a = new LiveAudio(60);
+    for (let i = 0; i < 100; i++) a.push(chunk(8000));
+    expect(a.paused()).toBe(false);
+    const b = new LiveAudio(60);
+    b.push(chunk(100)); b.push(chunk(100));
+    expect(b.paused()).toBe(false);
   });
 });
