@@ -286,13 +286,18 @@ function spkAskEnable() {
 }
 function spkSetOn(on: boolean) {
   $("#spkOn").checked = on;
-  D.sset("spkOn", on ? "1" : null); document.body.classList.toggle("nospk", !spkOn());
+  D.sset("spkOn", on ? "1" : null); document.body.classList.toggle("nospk", !spkOn()); spkBtnUi();
   for (const l of lines) paintSpk(l);
   if (D.onToggle) D.onToggle(on);
   if (!$("#spkPanel").hidden) renderSpk();
   spkAuto();
 }
 
+/** 实时界面底部的说话人开关(和设置里的「识别说话人」是同一个开关,按会话存) */
+export function spkBtnUi(): void {
+  const b = $("#lspkBtn"), on = spkOn();
+  b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); b.title = t(on ? "lspk.btnOff" : "lspk.btnOn");
+}
 /** main.ts 启动时调用一次(在任何说话人相关的函数可能被调用之前):注入依赖,挂上面板和设置里的按钮 */
 export function initSpeaker(deps: SpeakerDeps): void {
   D = deps;
@@ -313,5 +318,7 @@ export function initSpeaker(deps: SpeakerDeps): void {
   $("#spkSettings").onclick = () => { D.openSettings(); $("#secSpk").scrollIntoView({ block: "start" }); };
   $("#spkConfirmOk").onclick = () => { store.set("spkConsent", "1"); $("#spkConfirm").hidden = true; spkSetOn(true); };
   $("#spkConfirmNo").onclick = () => { $("#spkConfirm").hidden = true; };
+  // 第一次打开同样要先确认(确认框在设置里)
+  $("#lspkBtn").onclick = () => { if (spkOn()) { $("#spkConfirm").hidden = true; spkSetOn(false); } else spkAskEnable(); };
   $("#spkOn").onchange = () => { if ($("#spkOn").checked) spkAskEnable(); else { $("#spkConfirm").hidden = true; spkSetOn(false); } };
 }

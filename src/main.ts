@@ -20,7 +20,7 @@ import { initTranslate, pumpTranslate, apiHeaders, loadMemo, setMemo } from "./t
 import { creator, openCreator, renderCreator, initCreator } from "./creator";
 import { liveAudio, lineAudio } from "./live-audio";
 import { initRecord, recBegin, recEnd, recUi } from "./live-record";
-import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
+import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow, spkBtnUi } from "./speaker-ui";
 import * as spkEngine from "./spk/engine";
 import { startLiveJudge, stopLiveJudge } from "./spk/live-judge";
 import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkFlush, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug, liveSpkStats } from "./spk/live";
@@ -110,7 +110,7 @@ state.sessions = store.json("sessions", []); state.curSess = null; state.sessDef
 
 function loadSettings() {
   $("#spkHint").hidden = !isFileSess(); $("#lspkHint").hidden = isFileSess(); // 实时会话也能开说话人识别
-  $("#spkOn").checked = spkOn();
+  $("#spkOn").checked = spkOn(); spkBtnUi();
   document.body.classList.toggle("nospk", !spkOn());
   $("#uiLang").value = getUiLang();
   $("#apiKey").value = store.get("apiKey", "");
@@ -266,7 +266,7 @@ $("#log").addEventListener("scroll", () => {
 let userScrolled = false;
 $("#log").addEventListener("touchstart", () => (userScrolled = true), { passive: true });
 $("#log").addEventListener("wheel", () => (userScrolled = true), { passive: true });
-function setFollow(v: boolean): void { follow = v; const b = $("#follow"); b.textContent = t(v ? "live.follow" : "live.unfollow"); b.classList.toggle("off", !v); if (v) { userScrolled = false; scrollEnd(); } }
+function setFollow(v: boolean): void { follow = v; const b = $("#follow"); b.textContent = b.title = t(v ? "live.follow" : "live.unfollow"); /* 窄屏只剩图标,title 当说明 */ b.classList.toggle("off", !v); if (v) { userScrolled = false; scrollEnd(); } }
 $("#follow").onclick = () => setFollow(!follow);
 
 // ---------- 翻译(OpenAI Chat Completions) ----------
