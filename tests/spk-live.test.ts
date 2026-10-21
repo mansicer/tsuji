@@ -27,6 +27,7 @@ vi.mock("../src/storage", () => ({ idb: {
 vi.mock("../src/spk/engine", () => ({
   loadModel: () => { H.loads++; return H.loadImpl(); },
   embed: (pcm: Float32Array) => { H.embeds++; return H.embedImpl!(pcm); },
+  engineKind: () => Promise.resolve("worker"),
 }));
 vi.mock("../src/speaker-ui", () => ({ spkOn: () => H.spkOn, SPK_COLORS: ["#000"] }));
 vi.mock("../src/i18n", () => ({ t: (k: string) => k, CJK: /[぀-鿿]/ }));
