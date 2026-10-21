@@ -327,6 +327,16 @@ test.describe.serial("live speaker identification", () => {
     await page.fill("#lspkPick input", "Host"); await page.press("#lspkPick input", "Enter");
     expect(await page.evaluate(() => window.__t.liveSpk()!.propose([{ id: window.__t.lines.find((l: any) => l.lspk?.name === "Host").lspk.g, name: "Kal", src: "gpt-evidence" }]).changed)).toBe(false);
     await expect(chipOf(page, kal)).toHaveText("Host");
+    // 只改这一句:一句 Awb 说的改成 Host,另一句 Slt 说的改成「另一个人」(新组 D);都算用户确认的组
+    const awb = TL2.find((x) => x.voice === "awb")!.text, slt = TL2.find((x) => x.voice === "slt")!.text;
+    await chipOf(page, awb).click();
+    await page.click("#lspkPick .move .btn:text-is('Host')");
+    await expect(chipOf(page, awb)).toHaveText("Host");
+    await chipOf(page, slt).click();
+    await page.click("#lspkNewPerson");
+    await expect(chipOf(page, slt)).toHaveText("D");
+    const pinned = await page.evaluate(([a, b]) => [a, b].map((t) => { const l = window.__t.lines.find((x: any) => x.raw === t); const s = window.__t.lspk.core.seg(l.id); return [s.pin, window.__t.lspk.core.group(s.pin).ok]; }), [awb, slt]);
+    expect(pinned).toEqual([[expect.any(Number), true], [3, true]]);
     await page.click("#go");
     expect(errors).toEqual([]);
   });

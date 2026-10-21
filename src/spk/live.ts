@@ -85,13 +85,13 @@ export function paintLive(l: Line): void {
   const g = x.g;
   (w.firstElementChild || w).textContent = x.name || letterOf(g); // 名字放在里面的 span 里截断:按钮自己 overflow: hidden 会把放大的点击区域也裁掉 w.style.setProperty("--c", color(g));
   w.classList.toggle("ai", x.src === "gpt-guess"); w.title = x.src ? t("lspk.src." + x.src) : "";
-  w.onclick = (e) => { e.stopPropagation(); openPick(g, w!); };
+  w.onclick = (e) => { e.stopPropagation(); openPick(g, w!, l.id); };
 }
 /** 按当前分组刷新每行的标签,有变化才改 DOM 和存储 */
 function paintAll() {
-  let dirty = false; const M = core.majors();
+  let dirty = false; const P = core.plan();
   for (const l of lines) {
-    const lab = core.label(l.id, M), old = l.lspk;
+    const lab = core.label(l.id, P), old = l.lspk;
     let nx: LiveLabel | undefined = old;
     if (lab) { const g = core.group(lab.g); nx = { g: lab.g, name: g ? g.name : null, src: g ? g.src : null, conf: lab.conf }; }
     else if (old && old.g != null) { const g = core.group(old.g); if (g) nx = { ...old, name: g.name, src: g.src }; } // 以前的行(刷新前、上次收音)
@@ -243,7 +243,7 @@ export function liveSpkPrefix(l: Line): string {
 
 // ---------- 接口 ----------
 const api: LiveSpkApi = {
-  groups: () => (core.majors() || core.visible()).map((g) => ({ id: g.id, letter: letterOf(g.id), name: g.name, src: g.src, cent: g.cent, dur: g.dur, n: g.n, visible: true })),
+  groups: () => core.plan().shown.map((g) => ({ id: g.id, letter: letterOf(g.id), name: g.name, src: g.src, cent: g.cent, dur: g.dur, n: g.n, visible: true })),
   linesSince(at) {
     const cur = new Set(lines);
     return [...runLines].filter((l) => cur.has(l) && l.aStart != null && l.aStart >= at).sort((a, b) => a.aStart! - b.aStart!)
@@ -316,11 +316,14 @@ function saveVoices(ids: number[]) {
 let pickEl: HTMLElement | null = null;
 function outside(e: Event) { if (pickEl && !pickEl.contains(e.target as Node) && !(e.target as HTMLElement).closest?.(".lwho")) closePick(); }
 function closePick() { if (pickEl) pickEl.remove(); pickEl = null; document.removeEventListener("pointerdown", outside, true); }
-function openPick(id: number, anchor: HTMLElement) {
+function openPick(id: number, anchor: HTMLElement, line: number) {
   closePick();
   const g = core.group(id); if (!g) return;
   const names = [...new Set([...cfg.glossary.people.map((p) => p.src), ...Object.keys((cfg.tpl && cfg.tpl.voices) || {})].map((s) => s.trim()).filter(Boolean))];
   const pick = (nm: string | null) => { if (core.rename(id, nm)) { paintAll(); save(); ui(); } closePick(); };
+  // 只改这一句:指到别的组或另一个人。算用户确认的真实标签,这句的声纹算进那个组,之后的分组按它来
+  const move = (to: number | "new") => { if (core.pin(line, to, Date.now()) != null) { paintAll(); save(); ui(); } closePick(); };
+  const others = core.seg(line) ? core.plan().shown.filter((x) => x.id !== id) : null;
   const inp = el("input", { type: "text", placeholder: t("lspk.otherPh"), hidden: true });
   const ok = el("button", { className: "btn primary", textContent: t("lspk.ok"), hidden: true, onclick: () => { if (inp.value.trim()) pick(inp.value); } });
   inp.onkeydown = (e) => { if (e.key === "Enter") ok.click(); if (e.key === "Escape") closePick(); };
@@ -329,6 +332,10 @@ function openPick(id: number, anchor: HTMLElement) {
     el("div", { className: "hint", textContent: t("lspk.who", { g: g.name || letterOf(id) }) }),
     el("div", { className: "btns names" }, ...names.map((nm) => el("button", { className: "btn" + (nm === g.name ? " primary" : ""), textContent: nm, onclick: () => pick(nm) })), other),
     el("div", { className: "btns other" }, inp, ok),
+    others ? el("div", { className: "hint", textContent: t("lspk.thisLine") }) : null,
+    others ? el("div", { className: "btns move" },
+      ...others.map((x) => el("button", { className: "btn", style: "--c:" + color(x.id), textContent: x.name || letterOf(x.id), onclick: () => move(x.id) })),
+      el("button", { className: "btn", id: "lspkNewPerson", textContent: t("lspk.newPerson"), onclick: () => move("new") })) : null,
     el("div", { className: "btns" },
       g.name ? el("button", { className: "btn", id: "lspkClearName", textContent: t("lspk.clear"), onclick: () => pick(null) }) : null,
       el("button", { className: "btn", textContent: t("lspk.close"), onclick: closePick })));

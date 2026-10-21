@@ -73,7 +73,7 @@ export const I18N: Record<string, Record<string, string>> = {
     "lspk.onHint": "实时收音时在本机分析声音并按声音分组（A、B、C…），再对照模板声纹库认人（首次需下载约 40 MB 组件）。还没认出的组会定期把最近的字幕发给 GPT 判断是谁，消耗 API：开始时约每 30–60 秒一次，之后逐渐放慢到约每 5 分钟一次，每小时最多 40 次，默认模型约 0.05–0.2 美元/小时；所有组都由你命名或由声纹库认出后不再调用。字幕不会等待说话人识别。点字幕上的标签可以给这一组起名字；停止收音后可以把起好名字的声音存进模板，下次同一个模板收音时自动认出。",
     "lspk.loading": "正在加载声纹模型 {pct}%，字幕照常显示", "lspk.err": "说话人识别出错：{m}", "lspk.named": "已命名的说话人：{names}", "lspk.save": "存入声纹库",
     "lspk.saveHint": "勾选要存进模板声纹库的说话人。之后用同一个模板收音时会自动认出他们。只保存声音特征（每人约 1 KB），不保存录音；同名的会合并。", "lspk.saveDo": "保存", "lspk.cancel": "取消", "lspk.saved": "已存入模板：{names}",
-    "lspk.who": "{g} 是谁？", "lspk.other": "其他…", "lspk.otherPh": "输入名字", "lspk.ok": "确定", "lspk.clear": "清除名字", "lspk.close": "关闭",
+    "lspk.who": "{g} 是谁？", "lspk.thisLine": "只改这一句，其实是：", "lspk.newPerson": "另一个人", "lspk.other": "其他…", "lspk.otherPh": "输入名字", "lspk.ok": "确定", "lspk.clear": "清除名字", "lspk.close": "关闭",
     "lspk.src.manual": "手动命名", "lspk.src.library": "声纹库", "lspk.src.gpt-evidence": "GPT 判定（有依据）", "lspk.src.gpt-guess": "GPT 推测",
     "spk.loadModel": "正在加载声纹模型 {pct}%", "spk.extract": "正在重新提取音轨……", "spk.embed": "正在分析声音特征 {i} / {n} 段",
    
@@ -168,7 +168,7 @@ export const I18N: Record<string, Record<string, string>> = {
     "lspk.onHint": "While listening, voices are analyzed on this device and grouped (A, B, C…), then matched against the template's voice library (the first run downloads about 40 MB). For groups not yet recognized, recent subtitles are sent to GPT from time to time to work out who is speaking. This uses the API: about every 30–60 seconds at first, slowing to about every 5 minutes, at most 40 requests per hour, roughly $0.05–0.20 per hour with the default model. It stops once every group is named by you or by the voice library. Subtitles never wait for it. Tap a tag on a subtitle to name that group. After you stop, you can save the named voices to the template so the next session with it recognizes them.",
     "lspk.loading": "Loading the voice model {pct}%; subtitles continue as usual", "lspk.err": "Speaker identification failed: {m}", "lspk.named": "Named speakers: {names}", "lspk.save": "Save voices",
     "lspk.saveHint": "Check the speakers to save to the template's voice library. Later sessions with the same template recognize them automatically. Only voice features are stored (about 1 KB per person), no audio; voices with the same name are merged.", "lspk.saveDo": "Save", "lspk.cancel": "Cancel", "lspk.saved": "Saved to the template: {names}",
-    "lspk.who": "Who is {g}?", "lspk.other": "Other…", "lspk.otherPh": "Name", "lspk.ok": "OK", "lspk.clear": "Clear name", "lspk.close": "Close",
+    "lspk.who": "Who is {g}?", "lspk.thisLine": "Only this line is actually:", "lspk.newPerson": "Someone else", "lspk.other": "Other…", "lspk.otherPh": "Name", "lspk.ok": "OK", "lspk.clear": "Clear name", "lspk.close": "Close",
     "lspk.src.manual": "Named by you", "lspk.src.library": "Voice library", "lspk.src.gpt-evidence": "GPT (with evidence)", "lspk.src.gpt-guess": "GPT guess",
     "spk.loadModel": "Loading the voice model {pct}%", "spk.extract": "Re-extracting the audio track…", "spk.embed": "Analyzing voices {i} / {n} clips",
    
