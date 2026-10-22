@@ -4,11 +4,13 @@
 // cfg 和 lines 只改内容、不重新赋值,几乎每个功能都用,也从这里导出。
 import type { Glossary } from "./glossary";
 import type { Basis } from "./spk/judge";
+import type { NameSrc } from "./spk/live-schedule";
 import { LineStore } from "./linestore";
 import { noKV, storageFailed } from "./storage";
 
-/** 声纹库里的一个人:v = base64(192 维 float32),d = 累计秒数 */
-export interface Voice { v: string; d: number }
+/** 声纹库里的一个人:v = base64(192 维 float32),d = 累计秒数;alts = 同一个人的其他声纹(例如现场收音),对照时取最像的一个 */
+export interface Voice { v: string; d: number; alts?: VoiceAlt[] }
+export interface VoiceAlt { v: string; d: number; src: "file" | "live" }
 
 /** 模板(内置模板带 builtin / modified 标记) */
 export interface Template {
@@ -28,7 +30,16 @@ export interface Session {
   createdAt: number; updatedAt: number; count: number;
   /** 文件会话才有 kind / file / progress / done;实时会话没有 kind */
   kind?: "file"; file?: SessionFile; progress?: number; done?: boolean;
+  /** 实时会话的录音(见 live-record.ts);recSession = 由录音转成的文件会话 */
+  rec?: RecInfo; recSession?: string;
+  /** 文件会话:由哪个实时会话的录音转来 */
+  fromLive?: string;
 }
+
+/** 录音的一段:每次开始收音(含重开麦克风)一段。t0 / t1 = 墙钟起止毫秒;at = 开始时的会话音频时钟(有 live-audio.ts 时才有) */
+export interface RecPart { t0: number; t1: number; at?: number; mime: string; bytes: number }
+/** 录音:on = 本会话开了录音(只对本会话);bytes = 总大小。块存 IndexedDB 的 rec:<会话 id>:<段号>:<块号> */
+export interface RecInfo { on: boolean; bytes: number; parts: RecPart[] }
 
 /** 页面上的一行字幕(存储格式见 linestore.ts 的 SavedLine 和 main.ts 的 saveLines) */
 export interface Line {
@@ -38,9 +49,14 @@ export interface Line {
   tEnd?: Date;
   /** 文件会话:在媒体里的起止毫秒 */
   ms?: number; endMs?: number;
+  /** 实时会话:音频时钟上的起止毫秒(见 live-audio.ts)。不是 ms / endMs:那两个是文件的媒体时间,管跳转、叠加字幕和 SRT */
+  aStart?: number; aEnd?: number;
   /** 说话人:spk 名字("" = 不确定),spc 颜色序号,spkBy GPT 判定依据,spkV 声纹候选 [组号, 占比],spkNear 最近片段的距离(秒) */
   spk?: string; spc?: number; spkBy?: Basis; spkV?: [number, number][]; spkNear?: number;
+  /** 实时说话人(spk/live.ts):g = 组号(null = 不确定),name / src = 组名和来源,conf = 和组质心的余弦 */
+  lspk?: LiveLabel;
 }
+export interface LiveLabel { g: number | null; name: string | null; src: NameSrc | null; conf: number }
 
 /** 当前生效的设置(applySettings / refreshTemplate 填充;启动时先填好再用) */
 export interface Cfg {

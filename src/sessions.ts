@@ -7,6 +7,7 @@ import { store, idb } from "./storage";
 import { parseGlossary } from "./glossary";
 import { fmtClock } from "./subtitle";
 import type { SavedLine } from "./linestore";
+import { fmtBytes, recPrefix } from "./live-record";
 
 /** main.ts 和其他功能里的东西,启动时由 main.ts 注入 */
 export interface SessionDeps {
@@ -23,6 +24,8 @@ export interface SessionDeps {
   filePause: () => void;
   flushLines: () => void;
   restoreLines: () => void;
+  /** 实时说话人:换到这个会话(没有会话时也调用,停掉上一个会话的状态) */
+  liveSpkSession: () => void;
   loadMemo: () => void;
   spkPanel: (on: boolean) => void;
   /** 翻译队列和上下文,切会话时清空 */
@@ -68,6 +71,7 @@ export function useSession(id: string | null): void {
   if (changed) {
     lines.length = 0; d.history.length = 0; d.queue.length = 0; state.nextId = 0;
     $("#log").replaceChildren(); $("#partial").textContent = "";
+    d.liveSpkSession();
     if (state.curSess) d.restoreLines();
     d.loadMemo();
   }
@@ -86,7 +90,9 @@ export function refreshTemplate(): void {
 }
 function deleteSession(id: string): void {
   d.bumpGen(id);
-  state.sessions = state.sessions.filter((x) => x.id !== id); saveSessions(); state.lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {});
+  state.sessions = state.sessions.filter((x) => x.id !== id);
+  for (const x of state.sessions) if (x.recSession === id) delete x.recSession; // 录音转出的文件会话删了:实时会话可以再转
+  saveSessions(); state.lineStore.set(id, null); store.set("smemo." + id, null); idb.del(id).catch(() => {}); idb.del("spk:" + id).catch(() => {}); idb.del("lspk:" + id).catch(() => {}); idb.delPrefix(recPrefix(id)).catch(() => {});
   if (state.curSess && state.curSess.id === id) useSession(state.sessions.length ? [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0].id : null);
 }
 // 旧版数据(字幕按模板存、设置全局存)升级成会话:每个有字幕的模板一个会话,当前设置带进去。只复制,不删旧数据
@@ -139,7 +145,7 @@ export function renderSessions(): void {
     }, false, "trash");
     list.append(el("div", { className: "card" + (cur ? " current" : "") }, h,
       el("div", { className: "meta", textContent: t("sess.meta", { tpl: tp ? tp.name : t("sess.tplMissing"), src: srcName(ss.source), tgt: tgtName(ss.target) }) }),
-      el("div", { className: "when", textContent: t("sess.when", { time: fmtWhen(ss.updatedAt), n: ss.count || 0 }) + (ss.kind === "file" && ss.file && ss.file.duration ? " · " + fmtClock(ss.file.duration) : "") }),
+      el("div", { className: "when", textContent: t("sess.when", { time: fmtWhen(ss.updatedAt), n: ss.count || 0 }) + (ss.kind === "file" && ss.file && ss.file.duration ? " · " + fmtClock(ss.file.duration) : "") + (ss.rec && ss.rec.bytes ? " · " + t("sess.recSize", { size: fmtBytes(ss.rec.bytes) }) : "") }),
       el("div", { className: "btns" },
         btn("sess.continue", () => { useSession(ss.id); d.show("live"); }, true, "play"),
         btn("sess.rename", rename, false, "edit"),

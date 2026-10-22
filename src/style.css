@@ -287,8 +287,8 @@ header h1 { font-size: 16px; letter-spacing: .01em; }
 .row { padding: 14px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); transition: opacity .3s; }
 .row .tgt { letter-spacing: .01em; }
 .row .src { margin-top: 5px; line-height: 1.5; }
-#log .row:has(~ .row ~ .row) { opacity: .62; }
-#log .row:has(~ .row ~ .row):hover { opacity: 1; }
+#log .row:has(~ .row ~ .row) > :not(.lwho) { opacity: .62; } /* 说话人标签不跟着变淡,小字淡了看不清 */
+#log .row:has(~ .row ~ .row):hover > * { opacity: 1; }
 .empty.sep { display: flex; align-items: center; gap: 12px; font-size: 12px; padding: 16px 0; }
 .empty.sep::before, .empty.sep::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 #emptyHint { display: grid; justify-items: center; gap: 14px; text-align: center; padding: 18vh 24px 0; font-size: 14px; line-height: 1.7; max-width: 420px; margin: 0 auto; }
@@ -421,3 +421,47 @@ body.filemode #go::before { width: 14px; height: 14px; }
 #memoBox summary { cursor: pointer; color: var(--fg); font-size: 14px; padding: 4px 0; }
 #memoList { margin: 6px 0 8px; padding-left: 22px; font-size: 13px; line-height: 1.5; color: var(--dim); }
 #memoList li.empty { list-style: none; margin-left: -22px; }
+
+/* 实时录音:开关在「自动滚动」旁;开着标红,录音中圆点闪烁;手机上没在录时只留图标 */
+.i-rec { --ic: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Ccircle cx='12' cy='12' r='4' fill='black'/%3E%3C/svg%3E"); }
+.ctlSide:last-child { gap: 6px; }
+#recBtn::before, #lspkBtn::before { width: 14px; height: 14px; }
+#lspkBtn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+#recBtn.on { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); } /* 手机上只剩图标:开着时加底色,不只靠颜色区分 */
+#recBtn.live { font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); }
+#recBtn.live::before { width: 8px; height: 8px; border-radius: 50%; -webkit-mask: none; mask: none; animation: pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #recBtn.live::before { animation: none; } }
+@media (max-width: 440px) { #follow { font-size: 0; gap: 0; padding: 7px 9px; } } /* 说话人、录音、自动滚动三个按钮在小屏上只留图标 */
+@media (max-width: 560px) { #recBtn:not(.live), #lspkBtn { font-size: 0; gap: 0; padding: 7px 9px; } #recBtn .rk { display: none; } }
+#recConfirm { margin: 0; }
+#recConfirm .btns .btn { font-size: inherit; gap: 6px; padding: 0 14px; } /* 不套用卡片按钮在手机上只留图标的规则 */
+#recBar { margin-top: 0; }
+body.filemode #recBtn, body.filemode #lspkBtn, body.filemode #recBar, body.filemode #recConfirm { display: none; }
+/* 实时说话人(spk/live.ts):字幕左上角的组标签(点一下起名)、起名的小菜单、存声纹 */
+.row:has(.lwho) { display: flow-root; }
+.row .who.lwho { float: left; position: relative; z-index: 1; max-width: 9em; white-space: nowrap; margin: 4px 8px 0 0; border: 0; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.row .who.lwho > span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.row .who.lwho::after { content: ""; position: absolute; inset: -9px -6px; } /* 点击区域放大到约 36 px 高 */
+.row .who.lwho.ai { border: 1px dashed var(--c); }
+#lspkPick { position: fixed; z-index: 20; display: grid; gap: 8px; width: min(320px, calc(100vw - 16px)); margin: 0; padding: 12px; border-top: 3px solid var(--c); box-shadow: var(--shadow-hi); }
+#lspkPick .btns { flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+#lspkPick .btn { min-height: 36px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 10px; font-size: 13px; }
+#lspkPick .other input { flex: 1; min-width: 0; min-height: 32px; padding: 4px 8px; }
+#lspkPick .other:has(input[hidden]) { display: none; }
+#lspkPick .move .btn[style] { border-left: 3px solid var(--c); }
+#lspkBar { margin-top: 0; }
+/* 底部的说明一行写不下就省略,按钮留在同一行,别把字幕挤没 */
+#lspkBar, #recBar { flex-wrap: nowrap; }
+#lspkInfo, #recInfo { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lspkBar .btn, #recBar .btn { min-height: 36px; }
+#lspkSaveBox { margin: 0; display: grid; gap: 8px; }
+#lspkSaveBox .btns .btn { font-size: inherit; gap: 6px; padding: 0 14px; min-height: 36px; } /* 同 #recConfirm:手机上不只留图标 */
+#lspkSaveBox label.check { min-height: 36px; display: flex; align-items: center; gap: 6px; }
+#lspkSaveBox .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); margin-right: 4px; }
+body.filemode #lspkBar, body.filemode #lspkSaveBox, body.nospk #lspkBar, body.nospk #lspkSaveBox { display: none; }
+
+#go { white-space: nowrap; }
+@media (max-width: 340px) { #go { padding-inline: 16px; } }
+#secSpk { scroll-margin-top: 72px; }
+footer { position: relative; z-index: 2; }
+footer > * { min-width: 0; } /* grid 子项默认按内容撑宽:不换行的说明文字会把整个底部栏撑出屏幕 */ /* 字幕区里有 opacity / z-index 的元素(变淡的旧行、说话人标签)不能盖住底部栏 */

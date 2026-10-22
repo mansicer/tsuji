@@ -7,7 +7,7 @@ import { LineStore, mergeLegacy } from "./linestore";
 import { store, storageFailed, setStorageWarn, idb, lsKV } from "./storage";
 import { toBase64, CHUNK, Resampler, Agc, sigStep } from "./audio";
 import { getUiLang, setUiLang, t, LANGS, TARGETS, srcName, tgtName, CJK } from "./i18n";
-import { extractPcm, splitTimed } from "./media";
+import { extractPcm, splitTimed, concatAudio } from "./media";
 import { asrPrompt, keywords, glossaryForLLM } from "./prompts";
 import { asrCost, mtCost } from "./cost";
 import { state, cfg, lines, type Line, type Session, type Template, type View } from "./state";
@@ -18,7 +18,12 @@ import { $, el, flash, flashBtn, download } from "./dom";
 import { initSessions, saveSessions, sget, sset, sessTemplate, newSession, useSession, refreshTemplate, migrateToSessions, fileName, renderSessions } from "./sessions";
 import { initTranslate, pumpTranslate, apiHeaders, loadMemo, setMemo } from "./translate";
 import { creator, openCreator, renderCreator, initCreator } from "./creator";
-import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow } from "./speaker-ui";
+import { liveAudio, lineAudio, PAUSE } from "./live-audio";
+import { initRecord, recBegin, recEnd, recUi } from "./live-record";
+import { initSpeaker, spkOn, spkPrefix, paintSpk, spkPanel, spkAuto, spkAfterFile, spkRunning, spkNow, spkBtnUi } from "./speaker-ui";
+import * as spkEngine from "./spk/engine";
+import { startLiveJudge, stopLiveJudge } from "./spk/live-judge";
+import { initLiveSpk, liveSpk, liveSpkStart, liveSpkStop, liveSpkSession, liveSpkFlush, liveSpkToggle, liveSpkClear, liveSpkPrefix, paintLive, liveSpkDebug, liveSpkStats } from "./spk/live";
 
 // ---------- 小工具 ----------
 // 存储写满 / 被禁用时的提示文案(节流在 storage.ts)
@@ -104,8 +109,8 @@ function saveAudioSettings() {
 state.sessions = store.json("sessions", []); state.curSess = null; state.sessDefaults = store.json("sessDefaults", {});
 
 function loadSettings() {
-  $("#secSpk").hidden = !isFileSess();
-  $("#spkOn").checked = spkOn();
+  $("#spkHint").hidden = !isFileSess(); $("#lspkHint").hidden = isFileSess(); // 实时会话也能开说话人识别
+  $("#spkOn").checked = spkOn(); spkBtnUi();
   document.body.classList.toggle("nospk", !spkOn());
   $("#uiLang").value = getUiLang();
   $("#apiKey").value = store.get("apiKey", "");
@@ -187,13 +192,13 @@ function saveLines() {
   pendingSave = () => {
     pendingSave = null;
     if (curGen(key) !== gen) return;
-    state.lineStore.set(key, lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}) })));
+    state.lineStore.set(key, lines.map((l) => ({ id: l.id, raw: l.raw, src: l.src, tgt: l.tgt, t: l.t.getTime(), done: l.done, ...(l.ms != null ? { s: l.ms, e: l.endMs } : {}), ...(l.aStart != null ? { as: l.aStart, ae: l.aEnd } : {}), ...(l.spk != null ? { k: l.spk, kc: l.spc, ...(l.spkBy ? { kb: l.spkBy } : {}) } : {}), ...(l.lspk ? { lg: l.lspk.g, ln: l.lspk.name, ls: l.lspk.src, lc: l.lspk.conf } : {}) })));
     if (ss) { ss.count = lines.length; ss.updatedAt = Date.now(); saveSessions(); }
   };
   saveLinesTimer = setTimeout(pendingSave, 500);
 }
 /** 切换会话、关页面前:把还在防抖里的保存立刻写掉(lines 马上要被清空) */
-function flushLines() { clearTimeout(saveLinesTimer); if (pendingSave) pendingSave(); }
+function flushLines() { clearTimeout(saveLinesTimer); if (pendingSave) pendingSave(); liveSpkFlush(); }
 function cancelSave() { clearTimeout(saveLinesTimer); pendingSave = null; }
 function restoreLines() {
   const saved = state.lineStore.get(sessKey());
@@ -202,7 +207,9 @@ function restoreLines() {
     const line = addLine(s.id, s.raw as string);
     line.src = (s.src ?? s.ja ?? s.raw) as string; line.tgt = s.tgt ?? s.zh ?? ""; line.t = new Date(s.t as number);
     if (s.s != null) setLineTime(line, s.s, s.e as number);
+    if (s.as != null) { line.aStart = s.as; line.aEnd = s.ae; }
     if (s.k != null) { line.spk = s.k; line.spc = s.kc; if (s.kb) line.spkBy = s.kb; paintSpk(line); }
+    if (s.lg !== undefined) { line.lspk = { g: s.lg ?? null, name: s.ln ?? null, src: s.ls ?? null, conf: s.lc ?? 0 }; paintLive(line); }
     if (s.done) { line.done = true; renderLine(line, false); }
     else { line.el.className = "row"; line.el.querySelector(".tgt")!.textContent = t("line.unfinished"); }
     if (line.done && line.src) history.push(line);
@@ -226,6 +233,7 @@ function tryMerge(line: Line): boolean {
   if (+line.t - +(prev.tEnd || prev.t) > MERGE_GAP_MS || !isShort(line.src)) return false;
   prev.src += " " + line.src; prev.tgt += " " + line.tgt; prev.raw += " " + line.raw; prev.tEnd = line.t;
   if (line.endMs != null) prev.endMs = line.endMs;
+  if (line.aEnd != null && clockLines.has(prev)) { prev.aEnd = Math.max(prev.aEnd ?? 0, line.aEnd); lineAudio(prev); }
   prev.el.querySelector(".tgt")!.textContent = breakLong(prev.tgt);
   prev.el.querySelector(".src")!.textContent = breakLong(prev.src);
   line.el.remove(); lines.splice(i, 1); saveLines(); scrollEnd();
@@ -248,6 +256,8 @@ function renderLine(line: Line, merge = true): void {
   scrollEnd();
 }
 function scrollEnd() { if (follow) { const m = $("#log"); m.scrollTop = m.scrollHeight; } }
+// 底部栏变高(停止后出现「存入声纹库」「转成文件会话」等)时字幕区变矮:跟随中就重新滚到底,别让最新一句被挡住
+new ResizeObserver(() => scrollEnd()).observe(document.querySelector("footer")!);
 $("#log").addEventListener("scroll", () => {
   const m = $("#log");
   const atEnd = m.scrollHeight - m.scrollTop - m.clientHeight < 40;
@@ -256,7 +266,7 @@ $("#log").addEventListener("scroll", () => {
 let userScrolled = false;
 $("#log").addEventListener("touchstart", () => (userScrolled = true), { passive: true });
 $("#log").addEventListener("wheel", () => (userScrolled = true), { passive: true });
-function setFollow(v: boolean): void { follow = v; const b = $("#follow"); b.textContent = t(v ? "live.follow" : "live.unfollow"); b.classList.toggle("off", !v); if (v) { userScrolled = false; scrollEnd(); } }
+function setFollow(v: boolean): void { follow = v; const b = $("#follow"); b.textContent = b.title = t(v ? "live.follow" : "live.unfollow"); /* 窄屏只剩图标,title 当说明 */ b.classList.toggle("off", !v); if (v) { userScrolled = false; scrollEnd(); } }
 $("#follow").onclick = () => setFollow(!follow);
 
 // ---------- 翻译(OpenAI Chat Completions) ----------
@@ -289,20 +299,33 @@ function sessionConfig() {
     turn_detection: streaming ? null : { type: "server_vad", threshold: cfg.vad, prefix_padding_ms: cfg.prefix, silence_duration_ms: cfg.silence },
   } } };
 }
-function emitLine(text: string): void {
-  // 只有标点/空白的碎片(比如 delta 开头单独一个「。」)丢掉
-  if (!text || !/[^\s。、！？!?,.，「」『』()（）…]/.test(text)) return;
-  diag.asr++; queue.push(addLine(++state.nextId, text)); pumpTranslate(); showLat();
+// 本次收音(当前音频时钟)里出的行;恢复出来的行的 aStart / aEnd 是以前的时钟,合并时不能混用
+let clockLines = new WeakSet<Line>();
+// 只有标点/空白的碎片(比如 delta 开头单独一个「。」)不出行
+const hasText = (s: string) => !!s && /[^\s。、！？!?,.，「」『』()（）…]/.test(s);
+/** tm:这一句在音频时钟上的 [起, 止](VAD 事件给的);流式模型没有,走 emitGuessed */
+function emitLine(text: string, tm?: [number, number]): void {
+  if (!hasText(text)) return;
+  const line = addLine(++state.nextId, text);
+  [line.aStart, line.aEnd] = tm || liveAudio.guess()[0]; clockLines.add(line); // 不设 ms:那是文件会话的媒体时间
+  diag.asr++; queue.push(line); lineAudio(line); pumpTranslate(); showLat();
+}
+/** 流式模型:同一批 delta 切出的几句一起按能量切分估时间,按字数分 */
+function emitGuessed(texts: string[]): void {
+  const ok = texts.filter(hasText); if (!ok.length) return;
+  const tms = liveAudio.guess(ok.map((x) => x.replace(/\s/g, "").length));
+  ok.forEach((x, i) => emitLine(x, tms[i]));
 }
 function liveDelta(delta: string): void {
   liveBuf += delta; liveUncommitted = true;
   // 日中文只按全角句末标点断句:半角 ! ? 常出现在节目名里(EXTEND STEP HOOOOPE!);其他语言按半角句末 + 空格
   const re = ["ja", "zh"].includes(cfg.tpl.source) ? /^[\s\S]*?[。！？]+[」』）)]*/ : /^[\s\S]*?(?:[。！？]+[」』）)]*|[.!?]+["')\]]*(?=\s))/;
-  let m: RegExpMatchArray | null;
+  let m: RegExpMatchArray | null; const out: string[] = [];
   while ((m = liveBuf.match(re))) {
-    emitLine(m[0].trim());
+    out.push(m[0].trim());
     liveBuf = liveBuf.slice(m[0].length);
   }
+  emitGuessed(out);
   liveBuf = liveBuf.replace(/^\s+/, "");
   $("#partial").textContent = liveBuf;
   clearTimeout(liveIdle ?? undefined);
@@ -312,7 +335,7 @@ function liveFlush() {
   clearTimeout(liveIdle ?? undefined); liveIdle = null;
   const s = liveBuf.trim(); liveBuf = "";
   $("#partial").textContent = "";
-  emitLine(s);
+  emitGuessed([s]);
   // 停顿时 commit,免得一整场都堆在同一个 item 里;commit 后的 completed 文本已经按 delta 出过了,忽略
   if (liveUncommitted && state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" })); liveUncommitted = false; }
 }
@@ -327,13 +350,23 @@ function showLat() {
   const gain = state.running && !micBroken ? agc.agcGain.toFixed(agc.agcGain < 10 ? 1 : 0) + "×" : "—";
   const item = (k: string, v: string | number, cls = "") => el("span", { className: "ib " + cls }, el("span", { className: "k", textContent: t(k) }), el("b", { textContent: String(v) }));
   $("#ibItems").replaceChildren(...[
-    isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
+    isFileSess() ? null : item("ib.gain", gain), isFileSess() ? null : item("ib.asr", asr), ...spkItems(item), item("ib.mt", fmtS(lat.mt)), item("ib.avg", fmtS(lat.mtAvg)),
     queue.length ? item("ib.queue", queue.length, "warn") : null,
     item("ib.lines", diag.asr), item("ib.noise", diag.noise), item("ib.err", diag.err, diag.err ? "bad" : ""),
     item("ib.cost", "$" + cost.total().toFixed(cost.total() < 1 ? 3 : 2)),
   ].filter(Boolean));
   $("#infobar").title = t("ib.deltas", { n: diag.deltas }); $("#signal").title = t("ib.level");
   showCost();
+}
+/** 实时说话人识别的性能(手机上看负担):声纹耗时、标签延迟,有积压 / 丢句时才显示;排在识别后面,手机窄屏不用横划就能看到 */
+function spkItems(item: (k: string, v: string | number, cls?: string) => HTMLElement): (HTMLElement | null)[] {
+  const s = isFileSess() ? null : liveSpkStats();
+  if (!s) return [];
+  const e = item("ib.spk", s.embedMs == null ? "—" : t("ms", { ms: Math.round(s.embedMs) }));
+  e.title = t("ib.spkTip", { where: s.kind ? t("ib." + s.kind) : "—" });
+  const l = item("ib.spkLag", s.lagMs == null ? "—" : fmtS(s.lagMs), s.lagMs != null && s.lagMs > 5000 ? "warn" : "");
+  l.title = t("ib.spkLagTip", { max: fmtS(s.lagMax) });
+  return [e, l, s.queue > 1 ? item("ib.spkQ", s.queue, "warn") : null, s.lost ? item("ib.spkLost", s.lost, "warn") : null];
 }
 // 费用估算(单价和计算见 cost.ts)
 const cost = {
@@ -356,21 +389,24 @@ function addMtCost(model: string, u: Usage | null | undefined, extra = 0): void 
   cost.mt += usd;
   cost.save(); showLat();
 }
+// 开着说话人识别时还在停顿处断句(PAUSE):一句里尽量只有一个人
 setInterval(() => {
   if (!state.running || isStreamingAsr() || !speechSince || !state.ws || state.ws.readyState !== 1) return;
-  if (performance.now() - speechSince > cfg.maxTurn * 1000) {
+  const len = performance.now() - speechSince;
+  if (len > cfg.maxTurn * 1000 || (spkOn() && len >= PAUSE.minTurn && liveAudio.paused())) {
     speechSince = performance.now();
-    state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    state.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" })); liveAudio.forced();
   }
-}, 250);
+}, 100);
 function connect() {
   const url = cfg.apiBase.replace(/^http/, "ws") + "/realtime?intent=transcription";
   setStatus("status.connecting", "warn");
   state.ws = cfg.useServer ? new WebSocket(url) : new WebSocket(url, ["realtime", "openai-insecure-api-key." + cfg.apiKey]);
-  liveUncommitted = false;
+  liveUncommitted = false; wsSending = false;
   state.ws.onopen = () => { state.ws!.send(JSON.stringify({ type: "session.update", session: sessionConfig() })); setStatus("status.listening", "on"); showLat(); };
   state.ws.onmessage = (ev) => {
     let m: any; try { m = JSON.parse(ev.data); } catch { return; } // 服务端事件的 JSON,字段随 type 变
+    const tm = isStreamingAsr() ? null : liveAudio.event(m); // item 起止时间(音频时钟)
     // 强制断句:持续噪声/背景音乐下 server VAD 一直认为在说话,一句话要等很久才出
     if (m.type === "input_audio_buffer.speech_started") speechSince = performance.now();
     else if (m.type === "input_audio_buffer.speech_stopped") { speechSince = 0; turnEndAt = performance.now(); }
@@ -389,7 +425,7 @@ function connect() {
       partial.delete(m.item_id);
       $("#partial").textContent = "";
       const text = (m.transcript || "").trim();
-      if (text) emitLine(text);
+      if (text) emitLine(text, tm || undefined);
     } else if (m.type === "error") {
       const msg = (m.error && (m.error.message || m.error.code)) || "?";
       console.error(m);
@@ -425,7 +461,7 @@ function setSignal(v: number): void {
   const n = sigStep(v), s = $("#signal");
   if (s.dataset.level !== String(n)) s.dataset.level = String(n);
 }
-let lastSampleAt = 0;
+let lastSampleAt = 0, wsSending = false; // wsSending:当前连接已经开始送音频(connAt 已记下)
 function onSamples(input: Float32Array): void {
   if (!actx) return; // 停止后 worklet 可能还有一条消息在路上
   lastSampleAt = performance.now();
@@ -434,7 +470,10 @@ function onSamples(input: Float32Array): void {
   let rms = 0; for (let i = 0; i < x.length; i++) rms += x[i] * x[i];
   setSignal(Math.sqrt(rms / (x.length || 1)) * 4);
   for (const pcm of rs!.chunk(x)) {
-    if (state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
+    const open = !!state.ws && state.ws.readyState === 1;
+    if (open && !wsSending) { wsSending = true; liveAudio.begin(); } // 服务端的 audio_*_ms 从这一块算起
+    liveAudio.push(pcm); // 不管连没连上都进缓冲,时钟不断
+    if (open) { state.ws!.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) })); addAsrCost(CHUNK / 24000); }
   }
 }
 async function startMic() {
@@ -474,13 +513,20 @@ async function start() {
   $("#go").textContent = t("live.stop"); $("#go").classList.add("stop");
   keepAwake();
   connect();
+  recBegin(stream); recUi();
+  liveSpkStart(); // 说话人识别:模型在后台加载,字幕不等它
+  startLiveJudge({ api: liveSpk, cfg: () => cfg, apiHeaders, addMtCost }); // 说话人识别关着时 liveSpk() 为 null,循环空转
 }
 function stop() {
   state.running = false;
   speechSince = 0;
   clearTimeout(reconnectTimer);
   if (liveBuf) liveFlush();
+  stopLiveJudge();
+  liveSpkStop(); // 先把还在排队的句子的音频切出来
+  liveAudio.stop(); wsSending = false; clockLines = new WeakSet();
   if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
+  recEnd(); // 先结束录音这一段,再停麦克风
   if (stream) stream.getTracks().forEach((x) => x.stop());
   if (actx) actx.close();
   stream = actx = tap = rs = null; agc = new Agc();
@@ -519,11 +565,13 @@ async function restartMic() {
   if (micRestarting) return;
   micRestarting = true; lastRestartAt = performance.now();
   try {
+    recEnd(); // 流换了:旧段结束,新流上开新的一段
     if (stream) stream.getTracks().forEach((x) => x.stop());
     if (actx) actx.close().catch(() => {});
     stream = actx = tap = rs = null;
     await startMic();
     lastSampleAt = performance.now();
+    recBegin(stream);
   } catch (e) {
     console.error(e);
     setStatus("status.micCant", "err");
@@ -605,25 +653,31 @@ async function loadMedia(id: string): Promise<File | null> {
 }
 function pickMedia(tplId: string): void { pickFor = { tplId }; $("#mediaFile").value = ""; $("#mediaFile").click(); }
 $("#reattach").onclick = () => { pickFor = { reattach: state.curSess!.id }; $("#mediaFile").value = ""; $("#mediaFile").click(); };
-$("#mediaFile").onchange = async () => {
-  const f = $("#mediaFile").files[0]; if (!f || !pickFor) return;
-  let ss: Session;
-  if (pickFor.reattach) ss = state.sessions.find((x) => x.id === pickFor!.reattach)!;
-  else {
-    ss = newSession(pickFor.tplId!);
-    Object.assign(ss, { kind: "file", name: f.name.replace(/\.[^.]+$/, ""), file: { name: f.name, size: f.size, type: f.type, duration: 0 }, progress: 0, done: false });
-    saveSessions();
-  }
-  pickFor = null; state.mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
+// 新建文件会话(选文件、实时录音转文件共用);extra 覆盖默认字段
+function newFileSession(tplId: string, f: File, extra: Partial<Session> = {}): Session {
+  const ss = newSession(tplId);
+  Object.assign(ss, { kind: "file", name: f.name.replace(/\.[^.]+$/, ""), file: { name: f.name, size: f.size, type: f.type, duration: 0 }, progress: 0, done: false }, extra);
+  saveSessions(); return ss;
+}
+// 文件存进本地,切到这个会话
+async function attachMedia(ss: Session, f: File): Promise<void> {
+  state.mediaBlob = f; fileJob.pcm = null; fileJob.sid = null;
   ss.file!.stored = await storeMedia(ss.id, f);
   if (!ss.file!.stored) flash(t("file.noStore"));
   saveSessions(); useSession(ss.id); show("live");
   if (ss.done) spkAuto(ss);
+}
+$("#mediaFile").onchange = async () => {
+  const f = $("#mediaFile").files[0]; if (!f || !pickFor) return;
+  const ss = pickFor.reattach ? state.sessions.find((x) => x.id === pickFor!.reattach)! : newFileSession(pickFor.tplId!, f);
+  pickFor = null;
+  await attachMedia(ss, f);
 };
 async function setupFileView() {
   const on = isFileSess();
   document.body.classList.toggle("filemode", on);
   $("#playerBox").hidden = $("#fileBar").hidden = !on;
+  recUi();
   if (!on) { $("#go").textContent = t(state.running ? "live.stop" : "live.start"); return; }
   const ss = state.curSess!;
   if (!state.mediaBlob || fileJob.sid !== ss.id) { state.mediaBlob = await loadMedia(ss.id) || (state.mediaBlob && state.mediaBlob.name === ss.file!.name && fileJob.sid == null ? state.mediaBlob : null); fileJob.sid = ss.id; fileJob.pcm = null; }
@@ -801,7 +855,8 @@ $("#expVtt").onclick = () => download(fileName(state.curSess!.name) + ".vtt", ma
 
 
 // ---------- 说话人识别(在 speaker-ui.ts) ----------
-initSpeaker({ sget, sset, fileJob, pcmCb, fileProgress, isFileSess, seekTo, saveLines, getTemplate, putTemplate, applySettings, apiHeaders, addMtCost, openSettings });
+initSpeaker({ sget, sset, fileJob, pcmCb, fileProgress, isFileSess, seekTo, saveLines, getTemplate, putTemplate, applySettings, apiHeaders, addMtCost, openSettings, onToggle: liveSpkToggle });
+initLiveSpk({ saveLines, getTemplate, putTemplate, isFileSess, onStats: showLat });
 
 // ---------- 模板列表 ----------
 function renderHome() {
@@ -883,7 +938,7 @@ $("#uiLang").onchange = () => {
   setUiLang($("#uiLang").value); store.set("uiLang", getUiLang());
   applyI18n(); applySettings(); listMics(); setStatus(statusKey, statusKind, statusExtra); setFollow(follow); showLat();
   $("#go").textContent = t(state.running ? "live.stop" : "live.start");
-  refreshTemplate(); if (state.view === "home") renderSessions(); if (state.view === "tpl") renderHome();
+  recUi(); refreshTemplate(); if (state.view === "home") renderSessions(); if (state.view === "tpl") renderHome();
 };
 ["#asrModel", "#mtModel", "#ctModel"].forEach((s) => $(s).addEventListener("change", showModelHints));
 $("#editCurTpl").onclick = () => { $("#settings").hidden = true; openCreator(sessTemplate(state.curSess) || cfg.tpl); };
@@ -892,7 +947,7 @@ $("#editCurTpl").onclick = () => { $("#settings").hidden = true; openCreator(ses
 $("#resetAudio").onclick = () => { for (const [id, d] of Object.entries(AUDIO_DEFAULTS)) { const e = $("#" + id); if (e.type === "checkbox") e.checked = d; else e.value = d; } applySettings(); };
 
 function transcriptText() {
-  return lines.filter((l) => l.src || l.tgt).map((l) => `[${l.ms != null ? fmtClock(l.ms) : l.t.toTimeString().slice(0, 8)}] ${l.tgt}\n           ${l.src}`).join("\n");
+  return lines.filter((l) => l.src || l.tgt).map((l) => `[${l.ms != null ? fmtClock(l.ms) : l.t.toTimeString().slice(0, 8)}] ${l.ms != null ? "" : liveSpkPrefix(l)}${l.tgt}\n           ${l.src}`).join("\n");
 }
 $("#copyAll").onclick = async (e: MouseEvent) => {
   const b = e.target as HTMLElement;
@@ -908,6 +963,7 @@ $("#clearAll").onclick = (e: MouseEvent) => {
   if (!clearArmed) { clearArmed = true; b.textContent = t("rec.clearSure"); setTimeout(() => { clearArmed = false; b.textContent = t("rec.clear"); }, 3000); return; }
   lines.length = 0; history.length = 0; $("#log").replaceChildren(); clearArmed = false; b.textContent = t("rec.clear"); setMemo([]);
   cancelSave(); bumpGen(sessKey()); state.lineStore.set(sessKey(), null); if (state.curSess) { state.curSess.count = 0; saveSessions(); } showEmptyHint();
+  liveSpkClear();
 };
 // 摘要:整段记录一次发给模型;估算超过模型上下文的 40% 就按行切成几段,每段先写详细笔记,最后合并成摘要。
 // 估算偏保守,接口仍报上下文超长时把每段减半重来
@@ -956,7 +1012,9 @@ $("#recap").onclick = async (e: MouseEvent) => {
 
 // ---------- 启动 ----------
 // init* 必须在下面第一个 await 之前调用:在那之前模块代码同步执行,点击等事件回调插不进来,不会用到还没注入依赖的模块
-initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
+initSessions({ AUDIO_DEFAULTS, builtins, allTemplates, getTemplate, loadSettings, stop, fileJob, filePause, flushLines, restoreLines, liveSpkSession, loadMemo, spkPanel, history, queue, sessionConfig, bumpGen, show });
+// 录音转文件会话:同一模板、同样的语言
+initRecord({ saveSessions, getStream: () => stream, audioNow: () => liveAudio.now(), openSession: (id) => { useSession(id); show("live"); }, toFileSession: async (live, f) => { const ss = newFileSession(live.tplId, f, { source: live.source, target: live.target, fromLive: live.id }); await attachMedia(ss, f); return ss; } });
 initTranslate({ queue, history, sessKey, curGen, renderLine, addMtCost, lat, mtHist, diag, showLat });
 // 旧版(单一节目,subs.html)的字幕记录复制到内置模板下。旧版页面和这里同源、共用存储,所以只复制不删除
 if (store.get("lines", null) && !store.get("lines.hoooope-2026", null)) store.set("lines.hoooope-2026", store.get("lines", null));
@@ -975,4 +1033,4 @@ window.addEventListener("beforeunload", (e) => { if (state.running) { e.preventD
 window.addEventListener("pagehide", flushLines);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushLines(); });
 // 给端到端测试用的观察口(模块作用域里的状态外面看不到)
-Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });
+Object.assign(window, { __t: { get lines() { return lines; }, get spk() { return state.spk; }, liveAudio, concatAudio, spkEngine, lspk: liveSpkDebug, liveSpk, transcriptText, setPickFor: (v: typeof pickFor) => (pickFor = v), subtitleFile, fileConfig, sessionConfig, makeRecap, splitByTokens, estTokens } });

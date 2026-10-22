@@ -34,6 +34,8 @@ export const idb = {
   put(k: string, v: unknown) { return this.run("readwrite", (st) => st.put(v, k)); },
   get(k: string): Promise<any> { return this.run("readonly", (st) => st.get(k)); },
   del(k: string) { return this.run("readwrite", (st) => st.delete(k)); },
+  /** 删掉某前缀的所有键(录音块 rec:<id>:*) */
+  delPrefix(prefix: string) { return this.run("readwrite", (st) => st.delete(IDBKeyRange.bound(prefix, prefix + "\uffff"))); },
   async entries(prefix: string): Promise<[string, unknown][]> {
     const db = await this.open();
     return new Promise((ok, bad) => {

@@ -25,6 +25,8 @@ jobs:
       - run: npm run build
       # 端到端测试跑在上一步的 dist/ 上
       - run: npx playwright install --with-deps chromium
+      # 端到端测试用 ffmpeg 的 flite 合成多人说话的测试音频(Ubuntu 的 ffmpeg 带 libflite)
+      - run: sudo apt-get install -y --no-install-recommends ffmpeg && ffmpeg -hide_banner -filters | grep -q flite
       - run: npm run e2e
       # 失败时上传截图和错误上下文,在 Actions 页面下载查看
       - uses: actions/upload-artifact@v7
